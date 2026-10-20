@@ -18,7 +18,9 @@ services:
       retries: 20
 
   api:
-    build: .
+    build:
+      context: .
+      target: base
     environment:
       DATABASE_URL: postgresql+psycopg://national:${POSTGRES_PASSWORD}@postgres:5432/national
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
