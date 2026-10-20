@@ -34,7 +34,7 @@ La imagen ejecuta las migraciones y carga el catálogo inicial de certificacione
 | GET | `/api/v1/ngos/enabled` | Consultar ONG habilitadas |
 | GET | `/api/v1/ngos/me/competencies` | Consultar el perfil estructurado propio |
 
-Las declaraciones de certificación y la ONG nueva comienzan en `PENDING_REVIEW`. La respuesta comunica el nivel y las capacidades como datos, sin tratar la revisión como un rechazo de la oferta. En esta etapa no se incluye una consola de revisión ni se habilitan capacidades automáticamente. Los niveles de riesgo permitidos quedan vacíos hasta que la certificación y la ONG tengan una habilitación verificada.
+Las declaraciones de certificación y la ONG nueva comienzan en `PENDING_REVIEW`. La respuesta comunica el nivel y las capacidades como datos, sin tratar la revisión como un rechazo de la oferta. En esta etapa no se incluye una consola de revisión ni se habilitan capacidades automáticamente. Los niveles de riesgo permitidos quedan vacíos hasta que la certificación y la ONG tengan una habilitación verificada; el perfil persiste los niveles autorizados sin inventar políticas de riesgo.
 
 ## Pruebas
 
