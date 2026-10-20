@@ -28,6 +28,7 @@ include = ["app*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["postgresql: requires a dedicated PostgreSQL test database"]
 
 [tool.ruff]
 target-version = "py314"

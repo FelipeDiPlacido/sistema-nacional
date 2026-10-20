@@ -1,0 +1,36 @@
+name: sistema-nacional-tests
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: national_test
+      POSTGRES_USER: national
+      POSTGRES_PASSWORD: test-only-password
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U national -d national_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: test
+    environment:
+      DATABASE_URL: postgresql+psycopg://national:test-only-password@postgres:5432/national_test
+      NATIONAL_TEST_DATABASE_URL: postgresql+psycopg://national:test-only-password@postgres:5432/national_test
+      JWT_SECRET: test-only-secret-with-at-least-32-characters
+      RESOURCE_ADMIN_TOKEN: test-resource-admin-token-at-least-32
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      [
+        "sh",
+        "-c",
+        "alembic upgrade head && alembic check && python -m pytest -q",
+      ]
