@@ -1,7 +1,16 @@
 from alembic import context
 
 from app.core.database import Base, get_engine
-from app.models import NGO, Certification, NationalResource, NGOCertification, User  # noqa: F401
+from app.models import (  # noqa: F401
+    NGO,
+    AllocationStatus,
+    Certification,
+    NationalResource,
+    NGOCertification,
+    ResourceAllocation,
+    ResourceAllocationItem,
+    User,
+)
 
 target_metadata = Base.metadata
 engine = get_engine()

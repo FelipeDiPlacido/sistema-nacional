@@ -1,7 +1,9 @@
 import hmac
 import logging
+import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
@@ -18,6 +20,8 @@ from app.models import NGO, Certification, NationalResource, NGOCertification, U
 from app.models.national import NGOCertificationStatus, NGOStatus, RiskLevel
 from app.schemas import (
     AccountResponse,
+    AllocationCreate,
+    AllocationResponse,
     AvailabilityConstraint,
     AvailabilityStatus,
     CertificationResponse,
@@ -33,6 +37,7 @@ from app.schemas import (
     ResourceAvailabilityResponse,
     TokenResponse,
 )
+from app.services.allocation_service import close_allocation, create_allocation
 
 router = APIRouter(prefix="/api/v1", tags=["Sistema Nacional"])
 logger = logging.getLogger(__name__)
@@ -347,3 +352,39 @@ def validate_resource_availability(
         availability_status=availability_status,
         constraints=constraints,
     )
+
+
+@router.post(
+    "/allocations",
+    response_model=AllocationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Comprometer recursos para una adjudicación",
+)
+def allocate_resources(
+    body: AllocationCreate,
+    response: Response,
+    db: DbSession,
+    idempotency_key: Annotated[uuid.UUID | None, Header(alias="Idempotency-Key")] = None,
+    x_national_admin_token: str | None = Header(default=None),
+):
+    require_resource_admin_token(x_national_admin_token)
+    if idempotency_key is None:
+        raise HTTPException(422, "Falta el encabezado Idempotency-Key")
+    allocation, created = create_allocation(db, body, idempotency_key)
+    if not created:
+        response.status_code = status.HTTP_200_OK
+    return allocation
+
+
+@router.post(
+    "/allocations/{allocation_id}/close",
+    response_model=AllocationResponse,
+    summary="Cerrar el proyecto y liberar sus recursos comprometidos",
+)
+def close_project_allocation(
+    allocation_id: uuid.UUID,
+    db: DbSession,
+    x_national_admin_token: Annotated[str | None, Header()] = None,
+):
+    require_resource_admin_token(x_national_admin_token)
+    return close_allocation(db, allocation_id)

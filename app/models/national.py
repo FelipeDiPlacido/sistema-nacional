@@ -2,7 +2,17 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, ForeignKey, Index, Integer, String
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -34,9 +44,13 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(254), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
     ngo: Mapped[NGO] = relationship(back_populates="owner", uselist=False)
 
@@ -49,9 +63,13 @@ class NGO(Base):
     owner_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), unique=True)
     name: Mapped[str] = mapped_column(String(160))
     status: Mapped[str] = mapped_column(String(32), default=NGOStatus.PENDING_REVIEW)
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
     owner: Mapped[User] = relationship(back_populates="ngo")
     certifications: Mapped[list[NGOCertification]] = relationship(
@@ -81,7 +99,9 @@ class NGOCertification(Base):
     )
     status: Mapped[str] = mapped_column(String(32), default=NGOCertificationStatus.PENDING_REVIEW)
     allowed_risk_levels: Mapped[list[str]] = mapped_column(JSON, default=list)
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
     ngo: Mapped[NGO] = relationship(back_populates="certifications")
     certification: Mapped[Certification] = relationship(back_populates="ngo_certifications")
 
@@ -109,8 +129,57 @@ class NationalResource(Base):
     committed_quantity: Mapped[int] = mapped_column(Integer, default=0)
     required_certification_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("certifications.id"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
     required_certification: Mapped[Certification] = relationship()
+
+
+class AllocationStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    CLOSED = "CLOSED"
+
+
+class ResourceAllocation(Base):
+    __tablename__ = "resource_allocations"
+    __table_args__ = (Index("ix_resource_allocations_ngo_id", "ngo_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    request_key: Mapped[uuid.UUID] = mapped_column(unique=True)
+    project_reference: Mapped[str] = mapped_column(String(160), unique=True)
+    ngo_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ngos.id"))
+    risk_level: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default=AllocationStatus.ACTIVE)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    items: Mapped[list[ResourceAllocationItem]] = relationship(
+        back_populates="allocation", cascade="all, delete-orphan"
+    )
+
+
+class ResourceAllocationItem(Base):
+    __tablename__ = "resource_allocation_items"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_resource_allocation_items_quantity_positive"),
+        Index("ix_resource_allocation_items_allocation_id", "allocation_id"),
+        Index("ix_resource_allocation_items_resource_id", "resource_id"),
+        UniqueConstraint(
+            "allocation_id",
+            "resource_id",
+            name="uq_resource_allocation_items_allocation_resource",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    allocation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("resource_allocations.id"))
+    resource_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("national_resources.id"))
+    quantity: Mapped[int] = mapped_column(Integer)
+    allocation: Mapped[ResourceAllocation] = relationship(back_populates="items")
+    resource: Mapped[NationalResource] = relationship()

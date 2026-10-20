@@ -132,3 +132,45 @@ class ResourceAvailabilityResponse(BaseModel):
     certification_status: NGOCertificationStatus | None
     availability_status: AvailabilityStatus
     constraints: list[AvailabilityConstraint]
+
+
+class AllocationItemCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    resource_code: str = Field(pattern=r"^[A-Z0-9_]{2,64}$")
+    quantity: int = Field(strict=True, gt=0, le=2_147_483_647)
+
+
+class AllocationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    project_reference: str = Field(min_length=1, max_length=160)
+    ngo_id: uuid.UUID
+    risk_level: RiskLevel
+    items: list[AllocationItemCreate] = Field(min_length=1, max_length=100)
+
+
+class AllocationItemResponse(BaseModel):
+    resource_code: str
+    resource_name: str
+    unit: str
+    quantity: int
+
+
+class AllocationResponse(BaseModel):
+    id: uuid.UUID
+    request_key: uuid.UUID
+    project_reference: str
+    ngo_id: uuid.UUID
+    risk_level: RiskLevel
+    status: str
+    created_at: datetime
+    closed_at: datetime | None
+    items: list[AllocationItemResponse]
+
+
+class AllocationConstraintDetail(BaseModel):
+    resource_code: str
+    requested_quantity: int
+    available_quantity: int
+    constraints: list[AvailabilityConstraint]

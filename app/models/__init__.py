@@ -1,3 +1,21 @@
-from app.models.national import NGO, Certification, NationalResource, NGOCertification, User
+from app.models.national import (
+    NGO,
+    AllocationStatus,
+    Certification,
+    NationalResource,
+    NGOCertification,
+    ResourceAllocation,
+    ResourceAllocationItem,
+    User,
+)
 
-__all__ = ["Certification", "NGO", "NGOCertification", "NationalResource", "User"]
+__all__ = [
+    "AllocationStatus",
+    "Certification",
+    "NationalResource",
+    "NGO",
+    "NGOCertification",
+    "ResourceAllocation",
+    "ResourceAllocationItem",
+    "User",
+]
