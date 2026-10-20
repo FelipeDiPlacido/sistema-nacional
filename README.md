@@ -1,6 +1,6 @@
 # Sistema Nacional de Gestión de Recursos y Riesgos
 
-Servicio independiente de RescueSync para el onboarding de ONG, el catálogo de certificaciones y los perfiles de competencia. Esta primera etapa establece autenticación JWT y datos estructurados de habilitación; todavía no adjudica ni bloquea recursos.
+Servicio independiente de RescueSync para el onboarding de ONG, el catálogo de certificaciones y los perfiles de competencia. Permite consultar disponibilidad y comprometer/liberar recursos de forma transaccional. La conexión automatizada con las convocatorias y ofertas de RescueSync sigue pendiente.
 
 ## Ejecución local con Docker
 
@@ -10,7 +10,7 @@ Requiere Docker Desktop o Docker Engine con Compose.
 Copy-Item .env.example .env
 ```
 
-Reemplazá `JWT_SECRET` y `RESOURCE_ADMIN_TOKEN` por secretos aleatorios diferentes de al menos 32 caracteres, y `POSTGRES_PASSWORD` por una contraseña local. `DATABASE_URL` del archivo de ejemplo corresponde al uso desde la computadora; Compose configura la URL interna del contenedor por separado. El token de administración solo permite registrar inventario; no es el JWT de una ONG.
+Reemplazá `JWT_SECRET` y `RESOURCE_ADMIN_TOKEN` por secretos aleatorios diferentes de al menos 32 caracteres, y `POSTGRES_PASSWORD` por una contraseña local. `DATABASE_URL` del archivo de ejemplo corresponde al uso desde la computadora; Compose configura la URL interna del contenedor por separado. El token administrativo permite cargar inventario inicial, adjudicar y cerrar proyectos; no es el JWT de una ONG.
 
 ```powershell
 docker compose up --build -d --wait
@@ -37,6 +37,8 @@ La imagen ejecuta las migraciones y carga el catálogo inicial de certificacione
 | GET | `/api/v1/resources` | Consultar disponibilidad global |
 | GET | `/api/v1/resources/{resource_code}` | Consultar disponibilidad de un recurso |
 | POST | `/api/v1/resources/validate` | Evaluar disponibilidad, competencia y riesgo para la ONG autenticada |
+| POST | `/api/v1/allocations` | Comprometer recursos con `Idempotency-Key` y `X-National-Admin-Token` |
+| POST | `/api/v1/allocations/{allocation_id}/close` | Cerrar el proyecto y liberar los recursos comprometidos |
 
 Las declaraciones de certificación y la ONG nueva comienzan en `PENDING_REVIEW`. La respuesta comunica el nivel y las capacidades como datos, sin tratar la revisión como un rechazo de la oferta. En esta etapa no se incluye una consola de revisión ni se habilitan capacidades automáticamente. Los niveles de riesgo permitidos quedan vacíos hasta que la certificación y la ONG tengan una habilitación verificada; el perfil persiste los niveles autorizados sin inventar políticas de riesgo.
 
@@ -67,7 +69,28 @@ Para evaluar una solicitud, registrá una ONG, iniciá sesión y autorizá el JW
 }
 ```
 
-La identidad de la ONG se obtiene del JWT. La respuesta `200` informa la cantidad disponible y `fulfillable_quantity`, el nivel de autorización, el estado de certificación, `availability_status` (`SUFFICIENT`, `PARTIAL` o `NONE`) y las restricciones observadas. Por ejemplo, una ONG pendiente recibe sus capacidades y restricciones en la respuesta; no se responde con un rechazo HTTP por no estar habilitada. La consulta es informativa: no reserva ni descuenta inventario, por lo que no debe usarse como garantía de adjudicación.
+La identidad de la ONG se obtiene del JWT. La respuesta `200` informa la cantidad disponible y `fulfillable_quantity`, el nivel de autorización, el estado de certificación, `availability_status` (`SUFFICIENT`, `PARTIAL` o `NONE`) y las restricciones observadas. Por ejemplo, una ONG pendiente recibe sus capacidades y restricciones en la respuesta; no se responde con un rechazo HTTP por no estar habilitada. La consulta es informativa y no reserva ni descuenta inventario.
+
+## Adjudicar y liberar recursos
+
+La adjudicación es una operación del sistema coordinador, autorizada con `X-National-Admin-Token`. Enviá un `Idempotency-Key` UUID único por solicitud:
+
+```json
+{
+  "project_reference": "EMERGENCY-100",
+  "ngo_id": "UUID-de-la-ONG",
+  "risk_level": "LOW",
+  "items": [
+    { "resource_code": "POTABLE_WATER", "quantity": 25 }
+  ]
+}
+```
+
+El servidor bloquea las filas de inventario solicitadas en orden estable dentro de una transacción PostgreSQL, vuelve a validar habilitación, certificación, riesgo y disponibilidad, y solo compromete todos los ítems si todos son posibles. Si algún recurso no puede cubrirse completamente, responde `409` con las restricciones por ítem y no modifica ningún stock. El locking evita que adjudicaciones concurrentes consuman las mismas unidades; una consulta previa a disponibilidad no sustituye esta adjudicación atómica.
+
+Una repetición con la misma clave y contenido devuelve la adjudicación ya creada (`200`) sin descontar stock nuevamente. Reusar la clave o `project_reference` con otro contenido devuelve `409`. La respuesta inicial (`201`) queda en estado `ACTIVE`.
+
+Cuando finalizan las actividades, el coordinador llama `POST /api/v1/allocations/{allocation_id}/close` con el mismo token administrativo. El cierre bloquea la adjudicación y los recursos, libera cada cantidad una sola vez y cambia el estado a `CLOSED`. Repetir el cierre es seguro e idempotente. Una asignación cerrada no se reactiva ni vuelve a comprometer recursos.
 
 ## Pruebas
 
@@ -78,10 +101,16 @@ python -m pip install -e ".[dev]"
 python -m pytest
 ```
 
-Las pruebas HTTP usan SQLite aislado; las migraciones y el despliegue están preparados para PostgreSQL 17. La migración `0002` incorpora el inventario nacional y restricciones de integridad para que las cantidades comprometidas no puedan superar el total.
+Las pruebas HTTP usan SQLite aislado. Para ejecutar también la prueba de concurrencia real con PostgreSQL 17, Docker Desktop debe estar iniciado:
+
+```powershell
+docker compose -f compose.test.yaml up --build --abort-on-container-exit --exit-code-from tests
+docker compose -f compose.test.yaml down
+```
+
+El Compose de pruebas usa una base efímera `national_test`, ejecuta las migraciones y `alembic check`, y lanza la prueba de locking con dos transacciones concurrentes. Las migraciones `0002` y `0003` agregan inventario, adjudicaciones, ítems y restricciones de integridad para que el stock comprometido no supere el total.
 
 ## Siguientes etapas
 
-1. Implementar compromiso con locking transaccional PostgreSQL y liberación/cierre.
-2. Integrar la evaluación posterior al cierre de convocatoria y la asignación de lotes en RescueSync.
-3. Desplegar en cloud y publicar las URLs reales de repositorios y servicios.
+1. Integrar la evaluación posterior al cierre de convocatoria y la asignación de lotes en RescueSync.
+2. Desplegar en cloud y publicar las URLs reales de repositorios y servicios.
