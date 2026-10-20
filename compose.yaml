@@ -23,6 +23,7 @@ services:
       DATABASE_URL: postgresql+psycopg://national:${POSTGRES_PASSWORD}@postgres:5432/national
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+      RESOURCE_ADMIN_TOKEN: ${RESOURCE_ADMIN_TOKEN:-}
     ports:
       - "127.0.0.1:8010:8000"
     depends_on:

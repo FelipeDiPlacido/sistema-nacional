@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     database_url: str
     jwt_secret: SecretStr = Field(min_length=32)
     access_token_expire_minutes: int = Field(default=60, ge=1, le=1440)
+    resource_admin_token: SecretStr | None = Field(default=None, min_length=32)
 
 
 @lru_cache

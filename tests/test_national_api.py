@@ -3,7 +3,7 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.models import NGO, NGOCertification
+from app.models import NGO, Certification, NGOCertification
 from app.models.national import NGOCertificationStatus, NGOStatus
 
 
@@ -12,6 +12,8 @@ def test_health_and_openapi_are_available(client: TestClient):
     schema = client.get("/openapi.json").json()
     assert schema["info"]["title"] == "Sistema Nacional de Gestión de Recursos y Riesgos"
     assert "/api/v1/ngos" in schema["paths"]
+    assert "/api/v1/resources" in schema["paths"]
+    assert "/api/v1/resources/validate" in schema["paths"]
 
 
 def test_register_login_and_get_structured_competency_profile(client, registration_payload):
@@ -102,3 +104,143 @@ def test_certification_catalog_and_enabled_ngo_catalog(client):
     assert certifications.status_code == 200
     assert len(certifications.json()) == 4
     assert client.get("/api/v1/ngos/enabled").json() == []
+
+
+def test_resource_admin_creates_inventory_and_public_catalog_reports_availability(client):
+    body = {
+        "code": "POTABLE_WATER",
+        "name": "Agua potable",
+        "category": "SUPPLIES",
+        "unit": "litros",
+        "total_quantity": 100,
+        "required_certification_code": "LOGISTICS",
+    }
+    unauthorized = client.post("/api/v1/resources", json=body)
+    assert unauthorized.status_code == 401
+
+    created = client.post(
+        "/api/v1/resources",
+        json=body,
+        headers={"X-National-Admin-Token": "test-resource-admin-token-at-least-32"},
+    )
+    assert created.status_code == 201
+    assert created.json()["available_quantity"] == 100
+    assert created.json()["committed_quantity"] == 0
+
+    listing = client.get("/api/v1/resources")
+    assert listing.status_code == 200
+    assert [resource["code"] for resource in listing.json()] == ["POTABLE_WATER"]
+    assert client.get("/api/v1/resources/POTABLE_WATER").json()["unit"] == "litros"
+
+
+def test_resource_validation_reports_pending_ngo_constraints(client, registration_payload):
+    registered = client.post("/api/v1/ngos", json=registration_payload).json()
+    token = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": registration_payload["email"],
+            "password": registration_payload["password"],
+        },
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/resources",
+        json={
+            "code": "WATER_PENDING",
+            "name": "Agua de prueba",
+            "category": "SUPPLIES",
+            "unit": "litros",
+            "total_quantity": 3,
+            "required_certification_code": "LOGISTICS",
+        },
+        headers={"X-National-Admin-Token": "test-resource-admin-token-at-least-32"},
+    )
+
+    response = client.post(
+        "/api/v1/resources/validate",
+        json={"resource_code": "WATER_PENDING", "quantity": 5, "risk_level": "LOW"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["authorization_level"] == "PENDING_REVIEW"
+    assert result["available_quantity"] == 3
+    assert result["fulfillable_quantity"] == 0
+    assert result["constraints"] == ["ONG_NOT_ENABLED", "CERTIFICATION_NOT_VERIFIED"]
+    assert registered["status"] == "PENDING_REVIEW"
+
+
+def test_resource_validation_returns_partial_quantity_and_risk_constraints(
+    client, db, registration_payload
+):
+    registered = client.post("/api/v1/ngos", json=registration_payload).json()
+    ngo_id = uuid.UUID(registered["id"])
+    ngo = db.get(NGO, ngo_id)
+    certification_record = db.scalar(
+        select(NGOCertification)
+        .join(NGOCertification.certification)
+        .where(
+            NGOCertification.ngo_id == ngo_id,
+            Certification.code == "LOGISTICS",
+        )
+    )
+    ngo.status = NGOStatus.ENABLED
+    certification_record.status = NGOCertificationStatus.VERIFIED
+    certification_record.allowed_risk_levels = ["LOW"]
+    db.commit()
+
+    token = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": registration_payload["email"],
+            "password": registration_payload["password"],
+        },
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/resources",
+        json={
+            "code": "WATER_LIMITED",
+            "name": "Agua limitada",
+            "category": "SUPPLIES",
+            "unit": "litros",
+            "total_quantity": 4,
+            "required_certification_code": "LOGISTICS",
+        },
+        headers={"X-National-Admin-Token": "test-resource-admin-token-at-least-32"},
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    partial = client.post(
+        "/api/v1/resources/validate",
+        json={"resource_code": "WATER_LIMITED", "quantity": 7, "risk_level": "LOW"},
+        headers=headers,
+    )
+    assert partial.status_code == 200
+    assert partial.json()["availability_status"] == "PARTIAL"
+    assert partial.json()["fulfillable_quantity"] == 4
+    assert partial.json()["constraints"] == ["INSUFFICIENT_STOCK"]
+
+    risk_mismatch = client.post(
+        "/api/v1/resources/validate",
+        json={"resource_code": "WATER_LIMITED", "quantity": 2, "risk_level": "HIGH"},
+        headers=headers,
+    )
+    assert risk_mismatch.status_code == 200
+    assert risk_mismatch.json()["availability_status"] == "NONE"
+    assert risk_mismatch.json()["fulfillable_quantity"] == 0
+    assert risk_mismatch.json()["constraints"] == ["RISK_LEVEL_NOT_ALLOWED"]
+
+
+def test_resource_registration_rejects_unknown_certification_and_duplicate_code(client):
+    headers = {"X-National-Admin-Token": "test-resource-admin-token-at-least-32"}
+    body = {
+        "code": "WATER_STOCK",
+        "name": "Reserva de agua",
+        "category": "SUPPLIES",
+        "unit": "litros",
+        "total_quantity": 10,
+        "required_certification_code": "UNKNOWN",
+    }
+    assert client.post("/api/v1/resources", json=body, headers=headers).status_code == 422
+    body["required_certification_code"] = "LOGISTICS"
+    assert client.post("/api/v1/resources", json=body, headers=headers).status_code == 201
+    assert client.post("/api/v1/resources", json=body, headers=headers).status_code == 409

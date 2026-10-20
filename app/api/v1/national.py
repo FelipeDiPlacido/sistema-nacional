@@ -1,6 +1,7 @@
+import hmac
 import logging
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
@@ -13,22 +14,51 @@ from app.core.security import (
     dummy_password_hash,
     password_hasher,
 )
-from app.models import NGO, Certification, NGOCertification, User
+from app.models import NGO, Certification, NationalResource, NGOCertification, User
 from app.models.national import NGOCertificationStatus, NGOStatus, RiskLevel
 from app.schemas import (
     AccountResponse,
+    AvailabilityConstraint,
+    AvailabilityStatus,
     CertificationResponse,
     CompetencyProfileResponse,
     CompetencyResponse,
     EnabledNGOResponse,
     LoginRequest,
+    NationalResourceCreate,
+    NationalResourceResponse,
     NGORegistration,
     NGORegistrationResponse,
+    ResourceAvailabilityRequest,
+    ResourceAvailabilityResponse,
     TokenResponse,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["Sistema Nacional"])
 logger = logging.getLogger(__name__)
+
+
+def resource_response(resource: NationalResource) -> NationalResourceResponse:
+    return NationalResourceResponse(
+        id=resource.id,
+        code=resource.code,
+        name=resource.name,
+        category=resource.category,
+        unit=resource.unit,
+        total_quantity=resource.total_quantity,
+        committed_quantity=resource.committed_quantity,
+        available_quantity=resource.total_quantity - resource.committed_quantity,
+        required_certification_code=resource.required_certification.code,
+        required_certification_name=resource.required_certification.name,
+    )
+
+
+def require_resource_admin_token(token: str | None) -> None:
+    configured_token = get_settings().resource_admin_token
+    if configured_token is None:
+        raise HTTPException(503, "La administración de inventario no está configurada")
+    if token is None or not hmac.compare_digest(token, configured_token.get_secret_value()):
+        raise HTTPException(401, "Se requiere una credencial de administración válida")
 
 
 @router.post(
@@ -166,4 +196,154 @@ def my_competencies(account: CurrentAccount, db: DbSession):
         ngo_name=ngo.name,
         authorization_level=NGOStatus(ngo.status),
         competencies=competencies,
+    )
+
+
+@router.post(
+    "/resources",
+    response_model=NationalResourceResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Registrar disponibilidad inicial de un recurso",
+)
+def create_resource(
+    body: NationalResourceCreate,
+    db: DbSession,
+    x_national_admin_token: str | None = Header(default=None),
+):
+    require_resource_admin_token(x_national_admin_token)
+    certification = db.scalar(
+        select(Certification).where(
+            Certification.code == body.required_certification_code,
+            Certification.is_active.is_(True),
+        )
+    )
+    if certification is None:
+        raise HTTPException(422, "La certificación requerida no existe o no está activa")
+
+    resource = NationalResource(
+        code=body.code,
+        name=body.name,
+        category=body.category,
+        unit=body.unit,
+        total_quantity=body.total_quantity,
+        committed_quantity=0,
+        required_certification=certification,
+        is_active=True,
+    )
+    db.add(resource)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        logger.info("national_resource_registration_conflict")
+        raise HTTPException(409, "Ya existe un recurso con ese código") from exc
+    resource = db.scalar(
+        select(NationalResource)
+        .options(joinedload(NationalResource.required_certification))
+        .where(NationalResource.id == resource.id)
+    )
+    return resource_response(resource)
+
+
+@router.get(
+    "/resources",
+    response_model=list[NationalResourceResponse],
+    summary="Consultar disponibilidad global de recursos",
+)
+def list_resources(db: DbSession):
+    resources = db.scalars(
+        select(NationalResource)
+        .options(joinedload(NationalResource.required_certification))
+        .where(NationalResource.is_active.is_(True))
+        .order_by(NationalResource.code)
+    ).all()
+    return [resource_response(resource) for resource in resources]
+
+
+@router.get(
+    "/resources/{resource_code}",
+    response_model=NationalResourceResponse,
+    summary="Consultar disponibilidad de un recurso",
+)
+def get_resource(resource_code: str, db: DbSession):
+    resource = db.scalar(
+        select(NationalResource)
+        .options(joinedload(NationalResource.required_certification))
+        .where(
+            NationalResource.code == resource_code,
+            NationalResource.is_active.is_(True),
+        )
+    )
+    if resource is None:
+        raise HTTPException(404, "No se encontró un recurso activo con ese código")
+    return resource_response(resource)
+
+
+@router.post(
+    "/resources/validate",
+    response_model=ResourceAvailabilityResponse,
+    summary="Evaluar disponibilidad y restricciones para la ONG autenticada",
+)
+def validate_resource_availability(
+    body: ResourceAvailabilityRequest,
+    account: CurrentAccount,
+    db: DbSession,
+):
+    _, ngo = account
+    resource = db.scalar(
+        select(NationalResource)
+        .options(joinedload(NationalResource.required_certification))
+        .where(
+            NationalResource.code == body.resource_code,
+            NationalResource.is_active.is_(True),
+        )
+    )
+    if resource is None:
+        raise HTTPException(404, "No se encontró un recurso activo con ese código")
+
+    certification = db.get(NGOCertification, (ngo.id, resource.required_certification_id))
+    constraints: list[AvailabilityConstraint] = []
+    if ngo.status != NGOStatus.ENABLED:
+        constraints.append(AvailabilityConstraint.ONG_NOT_ENABLED)
+    if certification is None or certification.status != NGOCertificationStatus.VERIFIED:
+        constraints.append(AvailabilityConstraint.CERTIFICATION_NOT_VERIFIED)
+    elif not certification.certification.is_active:
+        constraints.append(AvailabilityConstraint.CERTIFICATION_INACTIVE)
+    elif body.risk_level.value not in certification.allowed_risk_levels:
+        constraints.append(AvailabilityConstraint.RISK_LEVEL_NOT_ALLOWED)
+
+    available_quantity = resource.total_quantity - resource.committed_quantity
+    authorized = not any(
+        constraint
+        in {
+            AvailabilityConstraint.ONG_NOT_ENABLED,
+            AvailabilityConstraint.CERTIFICATION_NOT_VERIFIED,
+            AvailabilityConstraint.CERTIFICATION_INACTIVE,
+            AvailabilityConstraint.RISK_LEVEL_NOT_ALLOWED,
+        }
+        for constraint in constraints
+    )
+    fulfillable_quantity = min(body.quantity, available_quantity) if authorized else 0
+    if authorized and available_quantity < body.quantity:
+        constraints.append(AvailabilityConstraint.INSUFFICIENT_STOCK)
+
+    availability_status = (
+        AvailabilityStatus.SUFFICIENT
+        if fulfillable_quantity == body.quantity
+        else AvailabilityStatus.PARTIAL
+        if fulfillable_quantity > 0
+        else AvailabilityStatus.NONE
+    )
+    return ResourceAvailabilityResponse(
+        resource_code=resource.code,
+        requested_quantity=body.quantity,
+        available_quantity=available_quantity,
+        fulfillable_quantity=fulfillable_quantity,
+        risk_level=body.risk_level,
+        authorization_level=NGOStatus(ngo.status),
+        certification_status=(
+            NGOCertificationStatus(certification.status) if certification is not None else None
+        ),
+        availability_status=availability_status,
+        constraints=constraints,
     )

@@ -3,6 +3,7 @@ import uuid
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite://")
 os.environ.setdefault("JWT_SECRET", "test-secret-that-is-at-least-32-characters")
+os.environ.setdefault("RESOURCE_ADMIN_TOKEN", "test-resource-admin-token-at-least-32")
 
 import pytest
 from fastapi.testclient import TestClient

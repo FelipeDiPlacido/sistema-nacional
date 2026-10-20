@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import JSON, Boolean, ForeignKey, String
+from sqlalchemy import JSON, Boolean, CheckConstraint, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -43,6 +43,7 @@ class User(Base):
 
 class NGO(Base):
     __tablename__ = "ngos"
+    __table_args__ = (Index("ix_ngos_status", "status"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     owner_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), unique=True)
@@ -83,3 +84,33 @@ class NGOCertification(Base):
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
     ngo: Mapped[NGO] = relationship(back_populates="certifications")
     certification: Mapped[Certification] = relationship(back_populates="ngo_certifications")
+
+
+class NationalResource(Base):
+    __tablename__ = "national_resources"
+    __table_args__ = (
+        CheckConstraint("total_quantity >= 0", name="ck_national_resources_total_nonnegative"),
+        CheckConstraint(
+            "committed_quantity >= 0", name="ck_national_resources_committed_nonnegative"
+        ),
+        CheckConstraint(
+            "committed_quantity <= total_quantity",
+            name="ck_national_resources_commitment_within_total",
+        ),
+        Index("ix_national_resources_is_active", "is_active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(64), unique=True)
+    name: Mapped[str] = mapped_column(String(160))
+    category: Mapped[str] = mapped_column(String(64))
+    unit: Mapped[str] = mapped_column(String(80))
+    total_quantity: Mapped[int] = mapped_column(Integer)
+    committed_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    required_certification_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("certifications.id"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+    required_certification: Mapped[Certification] = relationship()

@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -73,3 +74,61 @@ class CompetencyProfileResponse(BaseModel):
     ngo_name: str
     authorization_level: NGOStatus
     competencies: list[CompetencyResponse]
+
+
+class NationalResourceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    code: str = Field(pattern=r"^[A-Z0-9_]{2,64}$")
+    name: str = Field(min_length=2, max_length=160)
+    category: str = Field(min_length=2, max_length=64)
+    unit: str = Field(min_length=1, max_length=80)
+    total_quantity: int = Field(strict=True, ge=0, le=2_147_483_647)
+    required_certification_code: str = Field(pattern=r"^[A-Z0-9_]{2,64}$")
+
+
+class NationalResourceResponse(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    category: str
+    unit: str
+    total_quantity: int
+    committed_quantity: int
+    available_quantity: int
+    required_certification_code: str
+    required_certification_name: str
+
+
+class AvailabilityConstraint(StrEnum):
+    ONG_NOT_ENABLED = "ONG_NOT_ENABLED"
+    CERTIFICATION_NOT_VERIFIED = "CERTIFICATION_NOT_VERIFIED"
+    CERTIFICATION_INACTIVE = "CERTIFICATION_INACTIVE"
+    RISK_LEVEL_NOT_ALLOWED = "RISK_LEVEL_NOT_ALLOWED"
+    INSUFFICIENT_STOCK = "INSUFFICIENT_STOCK"
+
+
+class AvailabilityStatus(StrEnum):
+    SUFFICIENT = "SUFFICIENT"
+    PARTIAL = "PARTIAL"
+    NONE = "NONE"
+
+
+class ResourceAvailabilityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    resource_code: str = Field(pattern=r"^[A-Z0-9_]{2,64}$")
+    quantity: int = Field(strict=True, gt=0, le=2_147_483_647)
+    risk_level: RiskLevel
+
+
+class ResourceAvailabilityResponse(BaseModel):
+    resource_code: str
+    requested_quantity: int
+    available_quantity: int
+    fulfillable_quantity: int
+    risk_level: RiskLevel
+    authorization_level: NGOStatus
+    certification_status: NGOCertificationStatus | None
+    availability_status: AvailabilityStatus
+    constraints: list[AvailabilityConstraint]
