@@ -2,9 +2,9 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
-from app.models.national import NGOCertificationStatus, NGOStatus, RiskLevel
+from app.models.national import NGOCertificationStatus, NGOStatus, RiskLevel, UserRole
 
 
 class NGORegistration(BaseModel):
@@ -40,9 +40,10 @@ class TokenResponse(BaseModel):
 class AccountResponse(BaseModel):
     id: uuid.UUID
     email: EmailStr
-    ngo_id: uuid.UUID
-    ngo_name: str
-    ngo_status: NGOStatus
+    role: UserRole
+    ngo_id: uuid.UUID | None = None
+    ngo_name: str | None = None
+    ngo_status: NGOStatus | None = None
 
 
 class CertificationResponse(BaseModel):
@@ -76,8 +77,40 @@ class CompetencyProfileResponse(BaseModel):
     competencies: list[CompetencyResponse]
 
 
+class NGOStatusUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: NGOStatus
+
+
+class CertificationReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: NGOCertificationStatus
+    allowed_risk_levels: list[RiskLevel] = Field(default_factory=list, max_length=4)
+
+    @model_validator(mode="after")
+    def validate_risk_levels(self):
+        if len(self.allowed_risk_levels) != len(set(self.allowed_risk_levels)):
+            raise ValueError("No se pueden repetir niveles de riesgo")
+        if (self.status == NGOCertificationStatus.VERIFIED) != bool(self.allowed_risk_levels):
+            raise ValueError("Solo una certificación verificada debe tener riesgos permitidos")
+        return self
+
+
+class ResourceOwnerUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ngo_id: uuid.UUID
+
+
+class NationalResourceUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    total_quantity: int = Field(strict=True, ge=0, le=2_147_483_647)
+    is_active: bool = Field(strict=True)
+
+
 class NationalResourceCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    ngo_id: uuid.UUID
 
     code: str = Field(pattern=r"^[A-Z0-9_]{2,64}$")
     name: str = Field(min_length=2, max_length=160)
@@ -89,6 +122,8 @@ class NationalResourceCreate(BaseModel):
 
 class NationalResourceResponse(BaseModel):
     id: uuid.UUID
+    ngo_id: uuid.UUID | None
+    is_active: bool
     code: str
     name: str
     category: str
@@ -102,6 +137,7 @@ class NationalResourceResponse(BaseModel):
 
 class AvailabilityConstraint(StrEnum):
     ONG_NOT_ENABLED = "ONG_NOT_ENABLED"
+    RESOURCE_NOT_OWNED = "RESOURCE_NOT_OWNED"
     CERTIFICATION_NOT_VERIFIED = "CERTIFICATION_NOT_VERIFIED"
     CERTIFICATION_INACTIVE = "CERTIFICATION_INACTIVE"
     RISK_LEVEL_NOT_ALLOWED = "RISK_LEVEL_NOT_ALLOWED"
@@ -122,6 +158,10 @@ class ResourceAvailabilityRequest(BaseModel):
     risk_level: RiskLevel
 
 
+class CoordinatorAvailabilityRequest(ResourceAvailabilityRequest):
+    ngo_id: uuid.UUID
+
+
 class ResourceAvailabilityResponse(BaseModel):
     resource_code: str
     requested_quantity: int
@@ -130,6 +170,7 @@ class ResourceAvailabilityResponse(BaseModel):
     risk_level: RiskLevel
     authorization_level: NGOStatus
     certification_status: NGOCertificationStatus | None
+    allowed_risk_levels: list[RiskLevel]
     availability_status: AvailabilityStatus
     constraints: list[AvailabilityConstraint]
 

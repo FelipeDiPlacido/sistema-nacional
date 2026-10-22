@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -61,7 +61,7 @@ def _allocation_response(allocation: ResourceAllocation) -> AllocationResponse:
 
 
 def _find_existing_allocation(
-    db: Session, request_key: uuid.UUID, project_reference: str
+    db: Session, request_key: uuid.UUID, project_reference: str, ngo_id: uuid.UUID
 ) -> ResourceAllocation | None:
     return db.scalar(
         select(ResourceAllocation)
@@ -69,7 +69,10 @@ def _find_existing_allocation(
         .where(
             or_(
                 ResourceAllocation.request_key == request_key,
-                ResourceAllocation.project_reference == project_reference,
+                and_(
+                    ResourceAllocation.project_reference == project_reference,
+                    ResourceAllocation.ngo_id == ngo_id,
+                ),
             )
         )
     )
@@ -94,7 +97,9 @@ def create_allocation(
 ) -> tuple[AllocationResponse, bool]:
     try:
         with db.begin():
-            existing = _find_existing_allocation(db, request_key, body.project_reference)
+            existing = _find_existing_allocation(
+                db, request_key, body.project_reference, body.ngo_id
+            )
             if existing is not None:
                 if not _matches_request(existing, body, request_key):
                     raise HTTPException(
@@ -108,7 +113,7 @@ def create_allocation(
                 if len(requested_codes) != len(set(requested_codes)):
                     raise HTTPException(422, "No se puede repetir un recurso en la adjudicación")
 
-                ngo = db.get(NGO, body.ngo_id)
+                ngo = db.scalar(select(NGO).where(NGO.id == body.ngo_id).with_for_update())
                 if ngo is None:
                     raise HTTPException(404, "No se encontró la ONG")
 
@@ -131,7 +136,9 @@ def create_allocation(
 
                 # A concurrent request may have committed while this transaction waited for
                 # the ordered resource locks.
-                existing = _find_existing_allocation(db, request_key, body.project_reference)
+                existing = _find_existing_allocation(
+                    db, request_key, body.project_reference, body.ngo_id
+                )
                 if existing is not None:
                     if not _matches_request(existing, body, request_key):
                         raise HTTPException(
@@ -155,7 +162,9 @@ def create_allocation(
                         resource = resources_by_code[requested.resource_code]
                         certification = certifications_by_id.get(resource.required_certification_id)
                         issues: list[AvailabilityConstraint] = []
-                        if ngo.status != NGOStatus.ENABLED:
+                        if resource.ngo_id != ngo.id:
+                            issues.append(AvailabilityConstraint.RESOURCE_NOT_OWNED)
+                        if ngo.status != NGOStatus.ENABLED or not ngo.owner.is_active:
                             issues.append(AvailabilityConstraint.ONG_NOT_ENABLED)
                         if (
                             certification is None
@@ -220,7 +229,7 @@ def create_allocation(
         return response, False
     except IntegrityError as exc:
         db.rollback()
-        existing = _find_existing_allocation(db, request_key, body.project_reference)
+        existing = _find_existing_allocation(db, request_key, body.project_reference, body.ngo_id)
         if existing is not None and _matches_request(existing, body, request_key):
             return _allocation_response(existing), False
         logger.info("allocation_registration_conflict")
@@ -229,7 +238,9 @@ def create_allocation(
         ) from exc
 
 
-def close_allocation(db: Session, allocation_id: uuid.UUID) -> AllocationResponse:
+def close_allocation(
+    db: Session, allocation_id: uuid.UUID, ngo_id: uuid.UUID | None = None
+) -> AllocationResponse:
     with db.begin():
         allocation = db.scalar(
             select(ResourceAllocation)
@@ -237,6 +248,8 @@ def close_allocation(db: Session, allocation_id: uuid.UUID) -> AllocationRespons
             .with_for_update()
         )
         if allocation is None:
+            raise HTTPException(404, "No se encontró la adjudicación")
+        if ngo_id is not None and allocation.ngo_id != ngo_id:
             raise HTTPException(404, "No se encontró la adjudicación")
         if allocation.status != AllocationStatus.CLOSED:
             items = db.scalars(
@@ -272,3 +285,29 @@ def close_allocation(db: Session, allocation_id: uuid.UUID) -> AllocationRespons
             allocation.closed_at = datetime.now(UTC)
             allocation_id = allocation.id
     return _allocation_response(_load_allocation(db, allocation_id))
+
+
+def get_allocation(
+    db: Session, allocation_id: uuid.UUID, ngo_id: uuid.UUID | None
+) -> AllocationResponse:
+    allocation = _load_allocation(db, allocation_id)
+    if ngo_id is not None and allocation.ngo_id != ngo_id:
+        raise HTTPException(404, "No se encontró la adjudicación")
+    return _allocation_response(allocation)
+
+
+def list_allocations(
+    db: Session, ngo_id: uuid.UUID | None, project_reference: str | None, offset: int, limit: int
+) -> list[AllocationResponse]:
+    query = (
+        select(ResourceAllocation)
+        .options(selectinload(ResourceAllocation.items).joinedload(ResourceAllocationItem.resource))
+        .order_by(ResourceAllocation.created_at, ResourceAllocation.id)
+        .offset(offset)
+        .limit(limit)
+    )
+    if ngo_id is not None:
+        query = query.where(ResourceAllocation.ngo_id == ngo_id)
+    if project_reference is not None:
+        query = query.where(ResourceAllocation.project_reference == project_reference)
+    return [_allocation_response(item) for item in db.scalars(query)]

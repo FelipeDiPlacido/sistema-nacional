@@ -13,11 +13,15 @@ RUN useradd --create-home app && chown -R app:app /app
 USER app
 
 EXPOSE 8000
-CMD ["sh", "-c", "alembic upgrade head && python -m app.seed && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "alembic upgrade head && python -m app.seed && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
 
 FROM base AS test
 USER root
 RUN pip install ".[dev]"
 COPY tests ./tests
+COPY scripts ./scripts
 USER app
 CMD ["python", "-m", "pytest", "-q"]
+
+# Cloud providers build the final stage unless a target is selected explicitly.
+FROM base AS production

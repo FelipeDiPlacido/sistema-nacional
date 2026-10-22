@@ -8,8 +8,8 @@ app = FastAPI(
     title="Sistema Nacional de Gestión de Recursos y Riesgos",
     version="0.1.0",
     description=(
-        "API nacional para onboarding de ONG y consulta de certificaciones y perfiles "
-        "estructurados de competencia."
+        "API nacional con JWT para registrar y habilitar ONG, verificar certificaciones y "
+        "riesgos, gestionar inventario propio y adjudicar/liberar recursos transaccionalmente."
     ),
 )
 

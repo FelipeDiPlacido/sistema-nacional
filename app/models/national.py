@@ -37,11 +37,18 @@ class RiskLevel(StrEnum):
     CRITICAL = "CRITICAL"
 
 
+class UserRole(StrEnum):
+    NGO = "NGO"
+    ADMIN = "ADMIN"
+    COORDINATOR = "COORDINATOR"
+
+
 class User(Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String(254), unique=True)
+    role: Mapped[str] = mapped_column(String(32), default=UserRole.NGO, server_default="NGO")
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -122,6 +129,8 @@ class NationalResource(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(64), unique=True)
+    # Older inventory has no known owner. New API writes require an NGO.
+    ngo_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ngos.id"), index=True)
     name: Mapped[str] = mapped_column(String(160))
     category: Mapped[str] = mapped_column(String(64))
     unit: Mapped[str] = mapped_column(String(80))
@@ -147,11 +156,14 @@ class AllocationStatus(StrEnum):
 
 class ResourceAllocation(Base):
     __tablename__ = "resource_allocations"
-    __table_args__ = (Index("ix_resource_allocations_ngo_id", "ngo_id"),)
+    __table_args__ = (
+        Index("ix_resource_allocations_ngo_id", "ngo_id"),
+        UniqueConstraint("project_reference", "ngo_id", name="uq_allocation_project_ngo"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     request_key: Mapped[uuid.UUID] = mapped_column(unique=True)
-    project_reference: Mapped[str] = mapped_column(String(160), unique=True)
+    project_reference: Mapped[str] = mapped_column(String(160))
     ngo_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ngos.id"))
     risk_level: Mapped[str] = mapped_column(String(16))
     status: Mapped[str] = mapped_column(String(16), default=AllocationStatus.ACTIVE)
