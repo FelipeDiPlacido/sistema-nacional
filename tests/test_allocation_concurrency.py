@@ -20,7 +20,7 @@ from app.models import (
 )
 from app.models.national import NGOCertificationStatus, NGOStatus, RiskLevel
 from app.schemas import AllocationCreate, AllocationItemCreate
-from app.services.allocation_service import close_allocation, create_allocation
+from app.services.allocation_service import cancel_allocation, close_allocation, create_allocation
 
 
 @pytest.mark.postgresql
@@ -118,6 +118,31 @@ def test_concurrent_awards_and_closures_preserve_stock(same_request):
         with ThreadPoolExecutor(max_workers=2) as executor:
             assert list(executor.map(attempt_close, (1, 2))) == ["CLOSED", "CLOSED"]
         with Session(engine) as db:
+            resource = db.scalar(
+                select(NationalResource).where(NationalResource.code == "CONCURRENCY_STOCK")
+            )
+            assert resource.committed_quantity == 0
+        cancel_key = uuid.uuid4()
+        cancel_body = AllocationCreate(
+            project_reference="CANCEL-RACE",
+            ngo_id=ngo_id,
+            risk_level=RiskLevel.LOW,
+            items=[AllocationItemCreate(resource_code="CONCURRENCY_STOCK", quantity=7)],
+        )
+
+        def create_or_cancel(index):
+            barrier.wait(timeout=10)
+            with Session(engine, expire_on_commit=False) as db:
+                if index == 1:
+                    return create_allocation(db, cancel_body, cancel_key)[0].status
+                return cancel_allocation(db, cancel_body, cancel_key).status
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(create_or_cancel, (1, 2)))
+        assert outcomes[1] == "CLOSED"
+        with Session(engine, expire_on_commit=False) as db:
+            delayed, created = create_allocation(db, cancel_body, cancel_key)
+            assert not created and delayed.status == "CLOSED"
             resource = db.scalar(
                 select(NationalResource).where(NationalResource.code == "CONCURRENCY_STOCK")
             )
