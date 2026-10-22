@@ -29,7 +29,7 @@ Las variables son opcionales: el código activa los valores anteriores sin confi
 | `RATE_LIMIT_REGISTRATION_PER_HOUR` | `10` |
 | `RATE_LIMIT_GLOBAL_REGISTRATION_PER_HOUR` | `30` |
 
-Todos los valores deben ser enteros positivos. En Render se configuran en **Environment** del servicio web; luego hay que desplegar para aplicarlos. Para cambiar los valores en Compose local, agregá las variables al bloque `environment` del servicio `api`: su archivo `.env` no se pasa íntegramente al contenedor.
+Todos los valores deben ser enteros positivos. En Render se configuran en **Environment** del servicio web; luego hay que desplegar para aplicarlos. En Compose local se configuran en `.env` y se aplican con `docker compose up -d`: Compose pasa las seis variables al contenedor y usa los valores iniciales cuando no están definidas.
 
 ## Clientes, proxies y capacidad
 

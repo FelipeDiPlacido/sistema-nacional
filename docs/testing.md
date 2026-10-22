@@ -4,10 +4,14 @@ Esta guía prueba la API nacional en forma independiente. No requiere abrir Boni
 
 ## Preparación
 
-1. Levantá el ambiente siguiendo el README y esperá que `docker compose up --build -d --wait` termine sin errores.
-2. Abrí <http://localhost:8010/docs>.
+1. Elegí el ambiente: para usar Render no hace falta levantar Docker local. Para probar en tu computadora, seguí el README y esperá que `docker compose up --build -d --wait` termine sin errores.
+2. Abrí [Swagger en Render](https://rescuesync-national-api.onrender.com/docs) o <http://localhost:8010/docs>, según el ambiente elegido. Las cuentas y los registros son distintos en cada base.
 3. Ejecutá `GET /ready`: debe responder `200` y `{"status":"ready"}`.
 4. Ejecutá `GET /api/v1/certifications`: debe incluir `LOGISTICS`.
+
+Los ejemplos crean datos de demostración. Usá correos, códigos de inventario y referencias nuevos en cada ejecución; cerrá las adjudicaciones al terminar. No suspendas ONG ni cambies recursos de otra persona para probar errores. Los correos y contraseñas de bootstrap se obtienen de la configuración privada del ambiente.
+
+La API aplica [límites de solicitudes](request-limits.md). Si devuelve `429`, esperá los segundos de `Retry-After`. Cambiar de JWT no reinicia la cuota y varios integrantes pueden compartirla detrás de un proxy. Las [evidencias guardadas](evidence/README.md) describen las pruebas ya realizadas y los datos que dejaron.
 
 ## Registrar y autenticar una ONG
 
@@ -155,4 +159,6 @@ export NATIONAL_COORDINATOR_PASSWORD='contraseña-de-coordinación-de-tu-env'
 python scripts/smoke_test.py
 ```
 
-En PowerShell, usá `$env:NATIONAL_URL="http://localhost:8010"` y el mismo formato `$env:NOMBRE="valor"` para las otras variables. El script debe imprimir `"result": "ok"` y los identificadores creados, sin contraseñas ni JWT. También sirve para verificar la URL HTTPS del despliegue cuando exista.
+En PowerShell, usá `$env:NATIONAL_URL="http://localhost:8010"` y el mismo formato `$env:NOMBRE="valor"` para las otras variables. Para usar Render, cambiá `NATIONAL_URL` a `https://rescuesync-national-api.onrender.com` y usá las cuentas de ese ambiente.
+
+El script debe imprimir `"result": "ok"` y los identificadores creados, sin contraseñas ni JWT. Reproduce el recorrido principal con dos ONG; no ejecuta todas las comprobaciones de permisos registradas en el informe histórico ni la suite de concurrencia. No reintenta automáticamente respuestas `429`: esperá la cuota antes de repetir una prueba. No ejecutes la suite de pytest contra la base pública.

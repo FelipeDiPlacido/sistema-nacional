@@ -2,7 +2,23 @@
 
 API externa de RescueSync para registrar ONG, revisar certificaciones y niveles de riesgo, gestionar inventario por ONG y comprometer/liberar recursos con transacciones y bloqueos en PostgreSQL. Mantiene la implementación inicial de Felipe y completa el circuito administrativo por API.
 
-La integración automática con RescueSync y Bonita y la publicación de una URL cloud siguen pendientes. Las ofertas y sus borradores permanecen en RescueSync; este servicio guarda inventario, capacidades y adjudicaciones.
+La API está desplegada en Render y fue verificada por HTTP con los roles `ADMIN`, `NGO` y `COORDINATOR`. La integración automática con RescueSync y Bonita sigue pendiente. Las ofertas y sus borradores permanecen en RescueSync; este servicio guarda inventario, capacidades y adjudicaciones.
+
+## Servicio desplegado
+
+| Recurso | URL |
+| --- | --- |
+| URL base de la API | <https://rescuesync-national-api.onrender.com> |
+| Swagger interactivo | <https://rescuesync-national-api.onrender.com/docs> |
+| Documento OpenAPI | <https://rescuesync-national-api.onrender.com/openapi.json> |
+| Salud del servicio | <https://rescuesync-national-api.onrender.com/health> |
+| Conexión con PostgreSQL | <https://rescuesync-national-api.onrender.com/ready> |
+| Repositorio del equipo | <https://github.com/FelipeDiPlacido/sistema-nacional> |
+| Dockerfile | [Dockerfile](Dockerfile) |
+
+La raíz `/` devuelve `404`: la API no tiene una página de inicio. Para explorar y ejecutar endpoints, abrí `/docs`. La URL pública no concede permisos administrativos; las operaciones privadas requieren JWT y el rol correspondiente. Las credenciales del ambiente se comparten por un canal privado del equipo, no en este repositorio.
+
+La [guía de pruebas](docs/testing.md) explica los cuerpos JSON, parámetros y resultados esperados. Las [evidencias de verificación](docs/evidence/README.md) conservan las 38 comprobaciones funcionales realizadas el 21/10/2026 (GMT-3), los identificadores de demostración y la validación posterior de los límites de solicitudes. Es una comprobación de la API independiente; no demuestra una ejecución integrada desde Bonita.
 
 ## Levantar el ambiente
 
@@ -120,8 +136,40 @@ python -m pytest -q
 
 Sin `NATIONAL_TEST_DATABASE_URL`, las pruebas HTTP usan SQLite y las pruebas exclusivas de PostgreSQL se omiten. El [script de demostración HTTP](scripts/smoke_test.py) también prueba el servicio levantado, dejando registros de demo con adjudicaciones cerradas; instrucciones en [docs/testing.md](docs/testing.md).
 
-## Despliegue pendiente
+## Límites de solicitudes
+
+La protección está activa por defecto en el código y se aplica antes de procesar los cuerpos, verificar contraseñas o consultar la base. La API responde `429` y `Retry-After` cuando se supera una cuota; los clientes deben esperar los segundos indicados antes de reintentar.
+
+| Operación | Por dirección de cliente | Total del proceso |
+| --- | --- | --- |
+| General, incluidos Swagger y OpenAPI | 120 por minuto | 600 por minuto |
+| Login | 10 por minuto | 30 por minuto |
+| Registro de ONG | 10 por hora | 30 por hora |
+
+Los intentos fallidos también consumen cuota. Los controles `GET`/`HEAD` de `/health` y `/ready` quedan disponibles. El Dockerfile usa un worker y los contadores viven en memoria: no se comparten entre réplicas y se reinician con el servicio. Un proxy puede agrupar a varias personas bajo una misma dirección. Ver [configuración, limitaciones y pruebas de las cuotas](docs/request-limits.md).
+
+## Despliegue en Render
+
+Para reproducir el ambiente:
+
+1. Creá una base PostgreSQL persistente y un **Web Service** Docker en la misma región y cuenta. El despliegue inicial usa PostgreSQL 17.
+2. Seleccioná la rama `main`, la raíz del repositorio como contexto y `./Dockerfile`. Si usás un fork, sincronizá su `main` con el repositorio del equipo antes de desplegar.
+3. En **Environment** del servicio web configurá estas variables privadas:
+
+   | Variable | Valor |
+   | --- | --- |
+   | `DATABASE_URL` | **Internal Database URL** de PostgreSQL; reemplazá solamente el prefijo `postgresql://` o `postgres://` por `postgresql+psycopg://` |
+   | `JWT_SECRET` | Secreto aleatorio de al menos 32 caracteres |
+   | `ACCESS_TOKEN_EXPIRE_MINUTES` | `60`, o la duración acordada por el equipo |
+   | `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` | Cuenta administrativa, contraseña de al menos 12 caracteres |
+   | `BOOTSTRAP_COORDINATOR_EMAIL` / `BOOTSTRAP_COORDINATOR_PASSWORD` | Cuenta de coordinación con un correo diferente y contraseña de al menos 12 caracteres |
+
+4. Usá `/ready` como ruta de salud y conservá una instancia. Las variables `RATE_LIMIT_*` son opcionales: sus valores iniciales están en `.env.example` y en la guía de límites.
+5. Desplegá y esperá a que el estado sea **Live**. El comando del Dockerfile aplica migraciones, carga el catálogo y crea las cuentas iniciales antes de iniciar la API.
+6. Verificá `/ready`, abrí `/docs` e iniciá sesión con cada cuenta. `GET /api/v1/auth/me` permite confirmar el rol antes de hacer operaciones.
 
 La imagen de ejecución es el target final `production` del Dockerfile; un build sin `--target` inicia la API. El target `test` queda reservado para las pruebas y Compose local sigue usando `base`. Acepta `PORT` (8000 por defecto), escucha en `0.0.0.0` y requiere una base PostgreSQL persistente accesible mediante `DATABASE_URL` con dialecto `postgresql+psycopg://`. Configurá también `JWT_SECRET` y las credenciales de bootstrap como variables privadas del proveedor. La URL externa debe usar HTTPS; `/ready` sirve como comprobación de salud.
 
-El contenedor aplica migraciones y seed al iniciar: para este despliegue inicial usá una instancia. Antes de escalar a varias, separá las migraciones/seed en un trabajo único de despliegue. Falta elegir/configurar el proveedor, desplegar, verificar el servicio desde fuera y publicar sus URLs reales. Tener Docker funcionando localmente no completa ese requisito de la entrega 3.
+Antes de escalar a varias instancias, separá las migraciones/seed en un trabajo único de despliegue y compartí los contadores de solicitudes entre procesos. Cambiar las variables de bootstrap no resetea contraseñas de cuentas existentes.
+
+Si el arranque muestra `Field required` para `database_url` o `jwt_secret`, faltan las variables del servicio web. Después de agregarlas, guardá y desplegá nuevamente. El archivo `.env` de una computadora no se sube automáticamente a Render.
