@@ -9,6 +9,7 @@ from sqlalchemy.orm import joinedload
 
 from app.core.config import get_settings
 from app.core.database import DbSession
+from app.core.rate_limit import RATE_LIMIT_RESPONSE
 from app.core.security import (
     AdminUser,
     CoordinatorUser,
@@ -51,7 +52,9 @@ from app.services.allocation_service import (
     list_allocations,
 )
 
-router = APIRouter(prefix="/api/v1", tags=["Sistema Nacional"])
+router = APIRouter(
+    prefix="/api/v1", tags=["Sistema Nacional"], responses={429: RATE_LIMIT_RESPONSE}
+)
 logger = logging.getLogger(__name__)
 
 

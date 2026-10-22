@@ -10,6 +10,12 @@ class Settings(BaseSettings):
     database_url: str
     jwt_secret: SecretStr = Field(min_length=32)
     access_token_expire_minutes: int = Field(default=60, ge=1, le=1440)
+    rate_limit_requests_per_minute: int = Field(default=120, ge=1, le=100_000)
+    rate_limit_global_requests_per_minute: int = Field(default=600, ge=1, le=100_000)
+    rate_limit_login_per_minute: int = Field(default=10, ge=1, le=10_000)
+    rate_limit_global_login_per_minute: int = Field(default=30, ge=1, le=10_000)
+    rate_limit_registration_per_hour: int = Field(default=10, ge=1, le=10_000)
+    rate_limit_global_registration_per_hour: int = Field(default=30, ge=1, le=10_000)
     bootstrap_admin_email: EmailStr | None = None
     bootstrap_admin_password: SecretStr | None = Field(default=None, min_length=12, max_length=128)
     bootstrap_coordinator_email: EmailStr | None = None

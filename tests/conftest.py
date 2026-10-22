@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base, get_db
 from app.core.security import get_auth_db, password_hasher
-from app.main import app
+from app.main import create_app
 from app.models import Certification, User
 from app.models.national import UserRole
 from app.seed import DEFAULT_CERTIFICATIONS
@@ -55,6 +55,8 @@ def db(request):
 
 @pytest.fixture
 def client(db):
+    app = create_app()
+
     def override_get_db():
         try:
             yield db
