@@ -238,6 +238,41 @@ def create_allocation(
         ) from exc
 
 
+def _release_locked_allocation(db: Session, allocation: ResourceAllocation):
+    if allocation.status != AllocationStatus.CLOSED:
+        items = db.scalars(
+            select(ResourceAllocationItem)
+            .where(ResourceAllocationItem.allocation_id == allocation.id)
+            .order_by(ResourceAllocationItem.resource_id)
+        ).all()
+        resource_ids = [item.resource_id for item in items]
+        resources = db.scalars(
+            select(NationalResource)
+            .where(NationalResource.id.in_(resource_ids))
+            .order_by(NationalResource.code)
+            .with_for_update()
+        ).all()
+        resources_by_id = {resource.id: resource for resource in resources}
+        for item in items:
+            resource = resources_by_id.get(item.resource_id)
+            if resource is None or resource.committed_quantity < item.quantity:
+                logger.error(
+                    "allocation_release_invariant_violation",
+                    extra={"allocation_id": str(allocation.id)},
+                )
+                raise HTTPException(
+                    500,
+                    (
+                        "No se pudo cerrar el proyecto por una inconsistencia del "
+                        "inventario; requiere revisión."
+                    ),
+                )
+        for item in items:
+            resources_by_id[item.resource_id].committed_quantity -= item.quantity
+        allocation.status = AllocationStatus.CLOSED
+        allocation.closed_at = datetime.now(UTC)
+
+
 def close_allocation(
     db: Session, allocation_id: uuid.UUID, ngo_id: uuid.UUID | None = None
 ) -> AllocationResponse:
@@ -251,39 +286,7 @@ def close_allocation(
             raise HTTPException(404, "No se encontró la adjudicación")
         if ngo_id is not None and allocation.ngo_id != ngo_id:
             raise HTTPException(404, "No se encontró la adjudicación")
-        if allocation.status != AllocationStatus.CLOSED:
-            items = db.scalars(
-                select(ResourceAllocationItem)
-                .where(ResourceAllocationItem.allocation_id == allocation.id)
-                .order_by(ResourceAllocationItem.resource_id)
-            ).all()
-            resource_ids = [item.resource_id for item in items]
-            resources = db.scalars(
-                select(NationalResource)
-                .where(NationalResource.id.in_(resource_ids))
-                .order_by(NationalResource.code)
-                .with_for_update()
-            ).all()
-            resources_by_id = {resource.id: resource for resource in resources}
-            for item in items:
-                resource = resources_by_id.get(item.resource_id)
-                if resource is None or resource.committed_quantity < item.quantity:
-                    logger.error(
-                        "allocation_release_invariant_violation",
-                        extra={"allocation_id": str(allocation.id)},
-                    )
-                    raise HTTPException(
-                        500,
-                        (
-                            "No se pudo cerrar el proyecto por una inconsistencia del "
-                            "inventario; requiere revisión."
-                        ),
-                    )
-            for item in items:
-                resources_by_id[item.resource_id].committed_quantity -= item.quantity
-            allocation.status = AllocationStatus.CLOSED
-            allocation.closed_at = datetime.now(UTC)
-            allocation_id = allocation.id
+        _release_locked_allocation(db, allocation)
     return _allocation_response(_load_allocation(db, allocation_id))
 
 
@@ -311,3 +314,72 @@ def list_allocations(
     if project_reference is not None:
         query = query.where(ResourceAllocation.project_reference == project_reference)
     return [_allocation_response(item) for item in db.scalars(query)]
+
+
+def cancel_allocation(
+    db: Session, body: AllocationCreate, request_key: uuid.UUID
+) -> AllocationResponse:
+    """Close an existing intent or persist a closed tombstone before a delayed create.
+
+    The shared NGO lock serializes this decision with create_allocation, which
+    rechecks idempotency after acquiring the same lock. A delayed create can only
+    return the closed record and can never reserve resources after cancellation.
+    """
+    try:
+        with db.begin():
+            ngo = db.scalar(select(NGO).where(NGO.id == body.ngo_id).with_for_update())
+            if ngo is None:
+                raise HTTPException(404, "No se encontró la ONG")
+            existing = _find_existing_allocation(
+                db, request_key, body.project_reference, body.ngo_id
+            )
+            if existing is not None:
+                if not _matches_request(existing, body, request_key):
+                    raise HTTPException(
+                        409, "La clave o referencia ya pertenece a otra adjudicación"
+                    )
+                allocation = db.scalar(
+                    select(ResourceAllocation)
+                    .where(ResourceAllocation.id == existing.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                _release_locked_allocation(db, allocation)
+            else:
+                codes = [item.resource_code for item in body.items]
+                if len(codes) != len(set(codes)):
+                    raise HTTPException(422, "No se puede repetir un recurso")
+                resources = {
+                    item.code: item
+                    for item in db.scalars(
+                        select(NationalResource)
+                        .where(NationalResource.code.in_(codes))
+                        .order_by(NationalResource.code)
+                        .with_for_update()
+                    )
+                }
+                if any(
+                    code not in resources or resources[code].ngo_id != body.ngo_id for code in codes
+                ):
+                    raise HTTPException(422, "Los recursos deben pertenecer a la ONG indicada")
+                allocation = ResourceAllocation(
+                    request_key=request_key,
+                    project_reference=body.project_reference,
+                    ngo_id=body.ngo_id,
+                    risk_level=body.risk_level.value,
+                    status=AllocationStatus.CLOSED,
+                    closed_at=datetime.now(UTC),
+                    items=[
+                        ResourceAllocationItem(
+                            resource=resources[item.resource_code], quantity=item.quantity
+                        )
+                        for item in body.items
+                    ],
+                )
+                db.add(allocation)
+                db.flush()
+            allocation_id = allocation.id
+        return _allocation_response(_load_allocation(db, allocation_id))
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "La clave o referencia ya pertenece a otra adjudicación") from exc

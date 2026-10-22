@@ -379,3 +379,43 @@ def test_expired_and_disabled_account_tokens_are_rejected(client, db):
     user.is_active = False
     db.commit()
     assert client.get("/api/v1/auth/me", headers=client.admin_headers).status_code == 401
+
+
+@pytest.mark.parametrize("create_first", [False, True])
+def test_cancel_intent_blocks_late_create_and_releases_once(client, coordinator, create_first):
+    ngo_id, headers = register(client)
+    approve(client, ngo_id)
+    assert stock(client, ngo_id, "CANCEL_WATER", headers).status_code == 201
+    key = str(uuid.uuid4())
+    body = {
+        "project_reference": "CANCEL-PROJECT",
+        "ngo_id": ngo_id,
+        "risk_level": "LOW",
+        "items": [{"resource_code": "CANCEL_WATER", "quantity": 6}],
+    }
+    request_headers = {**coordinator, "Idempotency-Key": key}
+    if create_first:
+        assert (
+            client.post("/api/v1/allocations", json=body, headers=request_headers).status_code
+            == 201
+        )
+    assert (
+        client.post(
+            "/api/v1/allocations/cancel", json=body, headers={**headers, "Idempotency-Key": key}
+        ).status_code
+        == 403
+    )
+    cancelled = client.post("/api/v1/allocations/cancel", json=body, headers=request_headers)
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "CLOSED"
+    repeated = client.post("/api/v1/allocations/cancel", json=body, headers=request_headers)
+    assert repeated.json()["id"] == cancelled.json()["id"]
+    delayed = client.post("/api/v1/allocations", json=body, headers=request_headers)
+    assert delayed.status_code == 200
+    assert delayed.json()["status"] == "CLOSED"
+    assert client.get("/api/v1/resources/CANCEL_WATER").json()["committed_quantity"] == 0
+    changed = {**body, "items": [{"resource_code": "CANCEL_WATER", "quantity": 5}]}
+    assert (
+        client.post("/api/v1/allocations/cancel", json=changed, headers=request_headers).status_code
+        == 409
+    )

@@ -173,3 +173,12 @@ La imagen de ejecución es el target final `production` del Dockerfile; un build
 Antes de escalar a varias instancias, separá las migraciones/seed en un trabajo único de despliegue y compartí los contadores de solicitudes entre procesos. Cambiar las variables de bootstrap no resetea contraseñas de cuentas existentes.
 
 Si el arranque muestra `Field required` para `database_url` o `jwt_secret`, faltan las variables del servicio web. Después de agregarlas, guardá y desplegá nuevamente. El archivo `.env` de una computadora no se sube automáticamente a Render.
+
+### Cancelación segura de intentos
+
+`POST /api/v1/allocations/cancel` requiere `COORDINATOR`, el mismo cuerpo que
+`POST /allocations` y la misma cabecera `Idempotency-Key`. Libera el compromiso
+existente o registra el intento como cerrado si todavía no llegó. Una solicitud
+de creación demorada devuelve ese registro cerrado y no vuelve a reservar.
+La respuesta es una adjudicación con `status: CLOSED`; repetir la cancelación
+no altera el stock. No exige una migración de base de datos.

@@ -46,6 +46,7 @@ from app.schemas import (
     TokenResponse,
 )
 from app.services.allocation_service import (
+    cancel_allocation,
     close_allocation,
     create_allocation,
     get_allocation,
@@ -433,6 +434,20 @@ def allocate_resources(
     if not created:
         response.status_code = status.HTTP_200_OK
     return allocation
+
+
+@router.post(
+    "/allocations/cancel",
+    response_model=AllocationResponse,
+    summary="Cancelar un intento y evitar compromisos tardíos",
+)
+def cancel_allocation_intent(
+    body: AllocationCreate,
+    user: CoordinatorUser,
+    db: DbSession,
+    idempotency_key: Annotated[uuid.UUID, Header(alias="Idempotency-Key")],
+):
+    return cancel_allocation(db, body, idempotency_key)
 
 
 @router.post(
