@@ -1,0 +1,12 @@
+Fecha: 21/10/2026 (GMT-3)
+Código probado: f694b76a7a781e88b5507cbe8d5073fa7cf08e95
+Ambiente: Docker; PostgreSQL 17 efímero, más los casos parametrizados de SQLite.
+Comando: docker compose -p national-request-limits-tests -f compose.test.yaml up --build --abort-on-container-exit --exit-code-from tests
+
+Extracto del registro, sin reconstruir el resultado:
+tests-1     | All checks passed!
+tests-1     | No new upgrade operations detected.
+tests-1     | 79 passed, 2 warnings in 14.88s
+
+Advertencias no bloqueantes: deprecación de httpx en Starlette TestClient y Operation ID duplicado en la aplicación auxiliar de pruebas de cuotas.
+La base y los contenedores de prueba se retiraron al terminar.

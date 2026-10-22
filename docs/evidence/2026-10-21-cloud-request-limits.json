@@ -1,0 +1,35 @@
+{
+  "result": "ok",
+  "checked_at": "2026-10-21T22:53:46.385636-03:00",
+  "base_url": "https://rescuesync-national-api.onrender.com",
+  "code_reference_commit": "203b6128c94071d2eebda49be9548b4892304f7f",
+  "deployment_hash_independently_verified": false,
+  "openapi_documents_429": true,
+  "login_probe": {
+    "method": "POST",
+    "path": "/api/v1/auth/login",
+    "body": {},
+    "statuses": [
+      422,
+      422,
+      422,
+      422,
+      422,
+      422,
+      422,
+      422,
+      422,
+      422,
+      429
+    ],
+    "retry_after_seconds": 56,
+    "cache_control": "no-store",
+    "status_after_wait": 422
+  },
+  "health_during_throttle": 200,
+  "ready_during_throttle": 200,
+  "accounts_created": 0,
+  "allocations_created": 0,
+  "registration_quota_exhausted_in_cloud": false,
+  "scope": "Bounded invalid-login probe and recovery; not a load test. Registration quotas and concurrent limits were tested locally."
+}
