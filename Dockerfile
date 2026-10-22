@@ -22,3 +22,6 @@ COPY tests ./tests
 COPY scripts ./scripts
 USER app
 CMD ["python", "-m", "pytest", "-q"]
+
+# Cloud providers build the final stage unless a target is selected explicitly.
+FROM base AS production

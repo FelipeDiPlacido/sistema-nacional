@@ -122,6 +122,6 @@ Sin `NATIONAL_TEST_DATABASE_URL`, las pruebas HTTP usan SQLite y las pruebas exc
 
 ## Despliegue pendiente
 
-La imagen de ejecución es el target `base` del Dockerfile. Acepta `PORT` (8000 por defecto), escucha en `0.0.0.0` y requiere una base PostgreSQL persistente accesible mediante `DATABASE_URL` con dialecto `postgresql+psycopg://`. Configurá también `JWT_SECRET` y las credenciales de bootstrap como variables privadas del proveedor. La URL externa debe usar HTTPS; `/ready` sirve como comprobación de salud.
+La imagen de ejecución es el target final `production` del Dockerfile; un build sin `--target` inicia la API. El target `test` queda reservado para las pruebas y Compose local sigue usando `base`. Acepta `PORT` (8000 por defecto), escucha en `0.0.0.0` y requiere una base PostgreSQL persistente accesible mediante `DATABASE_URL` con dialecto `postgresql+psycopg://`. Configurá también `JWT_SECRET` y las credenciales de bootstrap como variables privadas del proveedor. La URL externa debe usar HTTPS; `/ready` sirve como comprobación de salud.
 
 El contenedor aplica migraciones y seed al iniciar: para este despliegue inicial usá una instancia. Antes de escalar a varias, separá las migraciones/seed en un trabajo único de despliegue. Falta elegir/configurar el proveedor, desplegar, verificar el servicio desde fuera y publicar sus URLs reales. Tener Docker funcionando localmente no completa ese requisito de la entrega 3.
