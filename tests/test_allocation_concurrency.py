@@ -20,11 +20,12 @@ from app.models import (
 )
 from app.models.national import NGOCertificationStatus, NGOStatus, RiskLevel
 from app.schemas import AllocationCreate, AllocationItemCreate
-from app.services.allocation_service import create_allocation
+from app.services.allocation_service import close_allocation, create_allocation
 
 
 @pytest.mark.postgresql
-def test_concurrent_awards_cannot_overallocate_one_resource():
+@pytest.mark.parametrize("same_request", [False, True])
+def test_concurrent_awards_and_closures_preserve_stock(same_request):
     database_url = os.getenv("NATIONAL_TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("Set NATIONAL_TEST_DATABASE_URL to run PostgreSQL locking tests")
@@ -54,7 +55,10 @@ def test_concurrent_awards_cannot_overallocate_one_resource():
                     allowed_risk_levels=[RiskLevel.LOW.value],
                 )
             )
+            db.add(ngo)
+            db.flush()
             resource = NationalResource(
+                ngo_id=ngo.id,
                 code="CONCURRENCY_STOCK",
                 name="Concurrency stock",
                 category="TEST",
@@ -69,19 +73,22 @@ def test_concurrent_awards_cannot_overallocate_one_resource():
             ngo_id = ngo.id
 
         barrier = Barrier(2)
+        shared_key = uuid.uuid4()
 
         def attempt_award(index: int):
             body = AllocationCreate(
-                project_reference=f"CONCURRENT-PROJECT-{index}",
+                project_reference=f"CONCURRENT-PROJECT-{1 if same_request else index}",
                 ngo_id=ngo_id,
                 risk_level=RiskLevel.LOW,
                 items=[AllocationItemCreate(resource_code="CONCURRENCY_STOCK", quantity=7)],
             )
-            barrier.wait()
+            barrier.wait(timeout=10)
             with Session(engine, expire_on_commit=False) as db:
                 try:
-                    create_allocation(db, body, uuid.uuid4())
-                    return "created"
+                    _, created = create_allocation(
+                        db, body, shared_key if same_request else uuid.uuid4()
+                    )
+                    return "created" if created else "replayed"
                 except HTTPException as exc:
                     if exc.status_code != 409:
                         raise
@@ -90,7 +97,9 @@ def test_concurrent_awards_cannot_overallocate_one_resource():
         with ThreadPoolExecutor(max_workers=2) as executor:
             results = list(executor.map(attempt_award, (1, 2)))
 
-        assert sorted(results) == ["conflict", "created"]
+        assert sorted(results) == (
+            ["created", "replayed"] if same_request else ["conflict", "created"]
+        )
         with Session(engine) as db:
             resource = db.scalar(
                 select(NationalResource).where(NationalResource.code == "CONCURRENCY_STOCK")
@@ -99,6 +108,20 @@ def test_concurrent_awards_cannot_overallocate_one_resource():
             assert resource.committed_quantity == 7
             assert resource.committed_quantity <= resource.total_quantity
             assert len(allocations) == 1
+            allocation_id = allocations[0].id
+
+        def attempt_close(_):
+            barrier.wait(timeout=10)
+            with Session(engine, expire_on_commit=False) as db:
+                return close_allocation(db, allocation_id).status
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            assert list(executor.map(attempt_close, (1, 2))) == ["CLOSED", "CLOSED"]
+        with Session(engine) as db:
+            resource = db.scalar(
+                select(NationalResource).where(NationalResource.code == "CONCURRENCY_STOCK")
+            )
+            assert resource.committed_quantity == 0
     finally:
         Base.metadata.drop_all(engine)
         engine.dispose()

@@ -108,8 +108,12 @@ def test_certification_catalog_and_enabled_ngo_catalog(client):
     assert client.get("/api/v1/ngos/enabled").json() == []
 
 
-def test_resource_admin_creates_inventory_and_public_catalog_reports_availability(client):
+def test_resource_admin_creates_inventory_and_public_catalog_reports_availability(
+    client, registration_payload
+):
+    ngo_id = client.post("/api/v1/ngos", json=registration_payload).json()["id"]
     body = {
+        "ngo_id": ngo_id,
         "code": "POTABLE_WATER",
         "name": "Agua potable",
         "category": "SUPPLIES",
@@ -123,7 +127,7 @@ def test_resource_admin_creates_inventory_and_public_catalog_reports_availabilit
     created = client.post(
         "/api/v1/resources",
         json=body,
-        headers={"X-National-Admin-Token": "test-resource-admin-token-at-least-32"},
+        headers=client.admin_headers,
     )
     assert created.status_code == 201
     assert created.json()["available_quantity"] == 100
@@ -147,6 +151,7 @@ def test_resource_validation_reports_pending_ngo_constraints(client, registratio
     client.post(
         "/api/v1/resources",
         json={
+            "ngo_id": registered["id"],
             "code": "WATER_PENDING",
             "name": "Agua de prueba",
             "category": "SUPPLIES",
@@ -154,7 +159,7 @@ def test_resource_validation_reports_pending_ngo_constraints(client, registratio
             "total_quantity": 3,
             "required_certification_code": "LOGISTICS",
         },
-        headers={"X-National-Admin-Token": "test-resource-admin-token-at-least-32"},
+        headers=client.admin_headers,
     )
 
     response = client.post(
@@ -200,6 +205,7 @@ def test_resource_validation_returns_partial_quantity_and_risk_constraints(
     client.post(
         "/api/v1/resources",
         json={
+            "ngo_id": registered["id"],
             "code": "WATER_LIMITED",
             "name": "Agua limitada",
             "category": "SUPPLIES",
@@ -207,7 +213,7 @@ def test_resource_validation_returns_partial_quantity_and_risk_constraints(
             "total_quantity": 4,
             "required_certification_code": "LOGISTICS",
         },
-        headers={"X-National-Admin-Token": "test-resource-admin-token-at-least-32"},
+        headers=client.admin_headers,
     )
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -232,9 +238,13 @@ def test_resource_validation_returns_partial_quantity_and_risk_constraints(
     assert risk_mismatch.json()["constraints"] == ["RISK_LEVEL_NOT_ALLOWED"]
 
 
-def test_resource_registration_rejects_unknown_certification_and_duplicate_code(client):
-    headers = {"X-National-Admin-Token": "test-resource-admin-token-at-least-32"}
+def test_resource_registration_rejects_unknown_certification_and_duplicate_code(
+    client, registration_payload
+):
+    ngo_id = client.post("/api/v1/ngos", json=registration_payload).json()["id"]
+    headers = client.admin_headers
     body = {
+        "ngo_id": ngo_id,
         "code": "WATER_STOCK",
         "name": "Reserva de agua",
         "category": "SUPPLIES",
@@ -264,10 +274,11 @@ def enable_ngo_certification(db, ngo_id: uuid.UUID, certification_code: str = "L
     db.commit()
 
 
-def create_test_resource(client, code: str, quantity: int):
+def create_test_resource(client, code: str, quantity: int, ngo_id: uuid.UUID):
     return client.post(
         "/api/v1/resources",
         json={
+            "ngo_id": str(ngo_id),
             "code": code,
             "name": f"Recurso {code}",
             "category": "SUPPLIES",
@@ -275,7 +286,7 @@ def create_test_resource(client, code: str, quantity: int):
             "total_quantity": quantity,
             "required_certification_code": "LOGISTICS",
         },
-        headers={"X-National-Admin-Token": "test-resource-admin-token-at-least-32"},
+        headers=client.admin_headers,
     )
 
 
@@ -283,7 +294,7 @@ def test_allocation_commits_resources_and_is_idempotent(client, db, registration
     registered = client.post("/api/v1/ngos", json=registration_payload).json()
     ngo_id = uuid.UUID(registered["id"])
     enable_ngo_certification(db, ngo_id)
-    assert create_test_resource(client, "RESCUE_KITS", 10).status_code == 201
+    assert create_test_resource(client, "RESCUE_KITS", 10, ngo_id).status_code == 201
     payload = {
         "project_reference": "EMERGENCY-100",
         "ngo_id": str(ngo_id),
@@ -291,7 +302,7 @@ def test_allocation_commits_resources_and_is_idempotent(client, db, registration
         "items": [{"resource_code": "RESCUE_KITS", "quantity": 6}],
     }
     headers = {
-        "X-National-Admin-Token": "test-resource-admin-token-at-least-32",
+        **client.admin_headers,
         "Idempotency-Key": str(uuid.uuid4()),
     }
 
@@ -316,8 +327,8 @@ def test_allocation_is_atomic_when_one_resource_is_unavailable(client, db, regis
     registered = client.post("/api/v1/ngos", json=registration_payload).json()
     ngo_id = uuid.UUID(registered["id"])
     enable_ngo_certification(db, ngo_id)
-    create_test_resource(client, "AVAILABLE_PACKS", 10)
-    create_test_resource(client, "LIMITED_PACKS", 2)
+    create_test_resource(client, "AVAILABLE_PACKS", 10, ngo_id)
+    create_test_resource(client, "LIMITED_PACKS", 2, ngo_id)
     payload = {
         "project_reference": "EMERGENCY-ATOMIC",
         "ngo_id": str(ngo_id),
@@ -331,7 +342,7 @@ def test_allocation_is_atomic_when_one_resource_is_unavailable(client, db, regis
         "/api/v1/allocations",
         json=payload,
         headers={
-            "X-National-Admin-Token": "test-resource-admin-token-at-least-32",
+            **client.admin_headers,
             "Idempotency-Key": str(uuid.uuid4()),
         },
     )
@@ -348,7 +359,7 @@ def test_closing_allocation_releases_resources_once(client, db, registration_pay
     registered = client.post("/api/v1/ngos", json=registration_payload).json()
     ngo_id = uuid.UUID(registered["id"])
     enable_ngo_certification(db, ngo_id)
-    create_test_resource(client, "CLOSABLE_STOCK", 8)
+    create_test_resource(client, "CLOSABLE_STOCK", 8, ngo_id)
     allocation = client.post(
         "/api/v1/allocations",
         json={
@@ -358,12 +369,12 @@ def test_closing_allocation_releases_resources_once(client, db, registration_pay
             "items": [{"resource_code": "CLOSABLE_STOCK", "quantity": 5}],
         },
         headers={
-            "X-National-Admin-Token": "test-resource-admin-token-at-least-32",
+            **client.admin_headers,
             "Idempotency-Key": str(uuid.uuid4()),
         },
     ).json()
     close_url = f"/api/v1/allocations/{allocation['id']}/close"
-    admin_headers = {"X-National-Admin-Token": "test-resource-admin-token-at-least-32"}
+    admin_headers = client.admin_headers
 
     unauthorized = client.post(close_url)
     assert unauthorized.status_code == 401
@@ -391,6 +402,6 @@ def test_allocation_requires_admin_and_idempotency_key(client):
     response = client.post(
         "/api/v1/allocations",
         json=payload,
-        headers={"X-National-Admin-Token": "test-resource-admin-token-at-least-32"},
+        headers=client.admin_headers,
     )
     assert response.status_code == 422

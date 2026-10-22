@@ -24,7 +24,6 @@ services:
       DATABASE_URL: postgresql+psycopg://national:test-only-password@postgres:5432/national_test
       NATIONAL_TEST_DATABASE_URL: postgresql+psycopg://national:test-only-password@postgres:5432/national_test
       JWT_SECRET: test-only-secret-with-at-least-32-characters
-      RESOURCE_ADMIN_TOKEN: test-resource-admin-token-at-least-32
     depends_on:
       postgres:
         condition: service_healthy
@@ -32,5 +31,5 @@ services:
       [
         "sh",
         "-c",
-        "alembic upgrade head && alembic check && python -m pytest -q",
+        "ruff check app tests migrations scripts && alembic upgrade head && alembic check && python -m pytest -q",
       ]
