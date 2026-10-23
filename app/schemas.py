@@ -182,6 +182,19 @@ class AllocationItemCreate(BaseModel):
     quantity: int = Field(strict=True, gt=0, le=2_147_483_647)
 
 
+class AllocationItemConsumption(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    resource_code: str = Field(pattern=r"^[A-Z0-9_]{2,64}$")
+    quantity: int = Field(strict=True, ge=0, le=2_147_483_647)
+
+
+class AllocationClose(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    items: list[AllocationItemConsumption] = Field(max_length=100)
+
+
 class AllocationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -196,6 +209,7 @@ class AllocationItemResponse(BaseModel):
     resource_name: str
     unit: str
     quantity: int
+    consumed_quantity: int
 
 
 class AllocationResponse(BaseModel):

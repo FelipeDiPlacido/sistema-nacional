@@ -1,6 +1,6 @@
 # Sistema Nacional de Gestión de Recursos y Riesgos
 
-API externa de RescueSync para registrar ONG, revisar certificaciones y niveles de riesgo, gestionar inventario por ONG y comprometer/liberar recursos con transacciones y bloqueos en PostgreSQL. Mantiene la implementación inicial de Felipe y completa el circuito administrativo por API.
+API externa de RescueSync para registrar ONG, revisar certificaciones y niveles de riesgo, gestionar inventario por ONG y comprometer, consumir o liberar recursos con transacciones y bloqueos en PostgreSQL.
 
 La API está desplegada en Render y fue verificada por HTTP con los roles `ADMIN`, `NGO` y `COORDINATOR`. La integración automática con RescueSync y Bonita sigue pendiente. Las ofertas y sus borradores permanecen en RescueSync; este servicio guarda inventario, capacidades y adjudicaciones.
 
@@ -65,7 +65,7 @@ Todas las operaciones privadas usan `Authorization: Bearer <access_token>`. Obte
 | `ADMIN` | Revisar ONG/certificaciones, administrar inventario y realizar operaciones de coordinación |
 | `COORDINATOR` | Consultar competencias, validar y adjudicar recursos de ONG; consultar/cerrar adjudicaciones |
 
-El registro público solo crea cuentas `NGO` pendientes. Una ONG pendiente puede cargar inventario, pero no recibe nuevas adjudicaciones hasta que esté habilitada y tenga las certificaciones y riesgos correspondientes. Suspenderla o revocar certificaciones bloquea nuevos compromisos; las adjudicaciones existentes siguen pudiendo cerrarse para liberar stock.
+El registro público solo crea cuentas `NGO` pendientes. Una ONG pendiente puede cargar inventario, pero no recibe nuevas adjudicaciones hasta que esté habilitada y tenga las certificaciones y riesgos correspondientes. Suspenderla o revocar certificaciones bloquea nuevos compromisos; las adjudicaciones existentes siguen pudiendo cerrarse para registrar el consumo real y liberar el remanente.
 
 ## Endpoints
 
@@ -93,21 +93,22 @@ Los cuerpos, tipos, valores permitidos y campos obligatorios están en Swagger. 
 | POST | `/api/v1/allocations` | Coordinación/administración: adjudicar con encabezado `Idempotency-Key` UUID |
 | GET | `/api/v1/allocations` | Autenticado: listar; filtro `project_reference`, `offset`/`limit`; ONG solo ve las propias |
 | GET | `/api/v1/allocations/{allocation_id}` | Autenticado: consultar adjudicación, con restricción por ONG |
-| POST | `/api/v1/allocations/{allocation_id}/close` | ONG propietaria/coordinación/administración: finalizar su participación y liberar sus recursos |
+| POST | `/api/v1/allocations/{allocation_id}/close` | ONG propietaria/coordinación/administración: cerrar la adjudicación e informar consumo por recurso |
 
 ## Reglas de inventario y adjudicación
 
 - Cada registro nuevo de inventario pertenece a una ONG. `code` sigue siendo único en el sistema: dos ONG pueden usar, por ejemplo, `LP_WATER` y `BERISSO_WATER` para sus existencias de agua. No se comparte stock entre ellas.
-- `available_quantity = total_quantity - committed_quantity`. No se permite reducir el total por debajo de lo comprometido. Desactivar inventario impide nuevas adjudicaciones y no bloquea la liberación de las existentes.
+- `available_quantity = total_quantity - committed_quantity`. No se permite reducir el total por debajo de lo comprometido. Desactivar inventario impide nuevas adjudicaciones y no bloquea el cierre de las existentes.
 - La validación devuelve `200` con capacidades, riesgos permitidos, cantidad aprovechable y restricciones (`ONG_NOT_ENABLED`, `RESOURCE_NOT_OWNED`, `CERTIFICATION_NOT_VERIFIED`, `CERTIFICATION_INACTIVE`, `RISK_LEVEL_NOT_ALLOWED`, `INSUFFICIENT_STOCK`). Es informativa y no reserva stock.
 - La adjudicación bloquea la ONG y las filas de inventario en orden estable, vuelve a verificar permisos, certificación, riesgos y cantidades, y compromete **todos sus ítems o ninguno**. Si no puede, devuelve `409` con el detalle.
 - Puede haber varias ONG adjudicadas a la misma `project_reference`, con una adjudicación por pareja proyecto/ONG. Cada una debe contener todos sus recursos. No hay una transacción conjunta entre las adjudicaciones de distintas ONG.
 - Una solicitud nueva devuelve `201`. Repetir la misma `Idempotency-Key` y contenido devuelve `200` sin duplicar compromisos. Reutilizar la clave con otro contenido, o intentar otra adjudicación para el mismo proyecto/ONG, devuelve `409`.
-- Cada cierre libera solo la adjudicación indicada, una única vez, y devuelve `CLOSED`. Para terminar un proyecto con varias ONG hay que cerrar cada adjudicación. Una cerrada no se reactiva; repetir su solicitud devuelve la misma adjudicación cerrada.
+- Al cerrar una adjudicación, el body debe incluir todos sus recursos en `items`, cada uno con `resource_code` y `quantity` consumida (de cero a la cantidad adjudicada). Se descuenta del inventario total lo consumido y se libera el compromiso completo; lo no consumido queda disponible. La respuesta informa `consumed_quantity` por recurso.
+- Cada cierre afecta solo la adjudicación indicada, una única vez, y devuelve `CLOSED`. Para terminar un proyecto con varias ONG hay que cerrar cada adjudicación. Una cerrada no se reactiva; repetir el mismo consumo devuelve la adjudicación cerrada sin volver a descontar. Un body con un consumo diferente devuelve `409`.
 
 ## Actualizar una instalación anterior
 
-La migración `0004` conserva cuentas, cantidades y adjudicaciones. Todas las cuentas anteriores mantienen el rol `NGO`; no se les conceden privilegios administrativos.
+Las migraciones conservan cuentas, cantidades y adjudicaciones; la `0005` agrega el registro de consumo y deja en cero el consumo histórico desconocido. Todas las cuentas anteriores mantienen el rol `NGO`; no se les conceden privilegios administrativos.
 
 1. Agregá las cuatro variables `BOOTSTRAP_*` a `.env` usando correos diferentes de los de ONG ya registradas.
 2. Ejecutá `docker compose up --build -d --wait`.

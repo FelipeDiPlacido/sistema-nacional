@@ -19,7 +19,12 @@ from app.models import (
     User,
 )
 from app.models.national import NGOCertificationStatus, NGOStatus, RiskLevel
-from app.schemas import AllocationCreate, AllocationItemCreate
+from app.schemas import (
+    AllocationClose,
+    AllocationCreate,
+    AllocationItemConsumption,
+    AllocationItemCreate,
+)
 from app.services.allocation_service import cancel_allocation, close_allocation, create_allocation
 
 
@@ -113,7 +118,17 @@ def test_concurrent_awards_and_closures_preserve_stock(same_request):
         def attempt_close(_):
             barrier.wait(timeout=10)
             with Session(engine, expire_on_commit=False) as db:
-                return close_allocation(db, allocation_id).status
+                return close_allocation(
+                    db,
+                    allocation_id,
+                    AllocationClose(
+                        items=[
+                            AllocationItemConsumption(
+                                resource_code="CONCURRENCY_STOCK", quantity=0
+                            )
+                        ]
+                    ),
+                ).status
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             assert list(executor.map(attempt_close, (1, 2))) == ["CLOSED", "CLOSED"]

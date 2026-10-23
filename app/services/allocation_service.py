@@ -17,6 +17,7 @@ from app.models import (
 )
 from app.models.national import NGOCertificationStatus, NGOStatus, RiskLevel
 from app.schemas import (
+    AllocationClose,
     AllocationConstraintDetail,
     AllocationCreate,
     AllocationItemResponse,
@@ -54,6 +55,7 @@ def _allocation_response(allocation: ResourceAllocation) -> AllocationResponse:
                 resource_name=item.resource.name,
                 unit=item.resource.unit,
                 quantity=item.quantity,
+                consumed_quantity=item.consumed_quantity,
             )
             for item in allocation.items
         ],
@@ -274,7 +276,10 @@ def _release_locked_allocation(db: Session, allocation: ResourceAllocation):
 
 
 def close_allocation(
-    db: Session, allocation_id: uuid.UUID, ngo_id: uuid.UUID | None = None
+    db: Session,
+    allocation_id: uuid.UUID,
+    close_body: AllocationClose,
+    ngo_id: uuid.UUID | None = None,
 ) -> AllocationResponse:
     with db.begin():
         allocation = db.scalar(
@@ -286,7 +291,62 @@ def close_allocation(
             raise HTTPException(404, "No se encontró la adjudicación")
         if ngo_id is not None and allocation.ngo_id != ngo_id:
             raise HTTPException(404, "No se encontró la adjudicación")
-        _release_locked_allocation(db, allocation)
+        items = db.scalars(
+            select(ResourceAllocationItem)
+            .where(ResourceAllocationItem.allocation_id == allocation.id)
+            .order_by(ResourceAllocationItem.resource_id)
+        ).all()
+        requested_consumption = {
+            item.resource_code: item.quantity for item in close_body.items
+        }
+        if len(requested_consumption) != len(close_body.items):
+            raise HTTPException(422, "No se puede repetir un recurso en el cierre")
+        allocated_codes = {item.resource.code for item in items}
+        if requested_consumption.keys() != allocated_codes:
+            raise HTTPException(
+                422, "El cierre debe incluir exactamente los recursos adjudicados"
+            )
+        if allocation.status == AllocationStatus.CLOSED:
+            if any(
+                item.consumed_quantity != requested_consumption[item.resource.code]
+                for item in items
+            ):
+                raise HTTPException(409, "La adjudicación ya se cerró con otro consumo")
+        else:
+            resources = db.scalars(
+                select(NationalResource)
+                .where(NationalResource.id.in_([item.resource_id for item in items]))
+                .order_by(NationalResource.code)
+                .with_for_update()
+            ).all()
+            resources_by_id = {resource.id: resource for resource in resources}
+            for item in items:
+                resource = resources_by_id.get(item.resource_id)
+                consumed_quantity = requested_consumption[item.resource.code]
+                if consumed_quantity > item.quantity:
+                    raise HTTPException(
+                        422, "La cantidad consumida no puede superar la cantidad adjudicada"
+                    )
+                if resource is None or resource.committed_quantity < item.quantity:
+                    logger.error(
+                        "allocation_release_invariant_violation",
+                        extra={"allocation_id": str(allocation.id)},
+                    )
+                    raise HTTPException(
+                        500,
+                        (
+                            "No se pudo cerrar el proyecto por una inconsistencia del "
+                            "inventario; requiere revisión."
+                        ),
+                    )
+            for item in items:
+                resource = resources_by_id[item.resource_id]
+                consumed_quantity = requested_consumption[item.resource.code]
+                resource.committed_quantity -= item.quantity
+                resource.total_quantity -= consumed_quantity
+                item.consumed_quantity = consumed_quantity
+            allocation.status = AllocationStatus.CLOSED
+            allocation.closed_at = datetime.now(UTC)
     return _allocation_response(_load_allocation(db, allocation_id))
 
 

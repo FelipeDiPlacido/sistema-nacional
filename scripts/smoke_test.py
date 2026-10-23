@@ -136,11 +136,16 @@ def main():
         if replay["id"] != allocation["id"] or inventory["available_quantity"] != 4:
             raise RuntimeError("La adjudicación o su repetición modificó el stock incorrectamente")
         url = f"/api/v1/allocations/{allocation['id']}/close"
-        request(base, "POST", url, token=ngo_token)
-        closed = request(base, "POST", url, token=coordinator)
+        close_body = {"items": [{"resource_code": code, "quantity": 2}]}
+        request(base, "POST", url, close_body, ngo_token)
+        closed = request(base, "POST", url, close_body, coordinator)
         inventory = request(base, "GET", f"/api/v1/resources/{code}")
-        if closed["status"] != "CLOSED" or inventory["available_quantity"] != 10:
-            raise RuntimeError("El cierre no liberó los recursos correctamente")
+        if (
+            closed["status"] != "CLOSED"
+            or closed["items"][0]["consumed_quantity"] != 2
+            or inventory["available_quantity"] != 8
+        ):
+            raise RuntimeError("El cierre no consumió el stock declarado correctamente")
         results.append({"ngo_id": ngo_id, "resource_code": code, "allocation_id": allocation["id"]})
     awards = request(
         base, "GET", f"/api/v1/allocations?project_reference={project}", token=coordinator
