@@ -296,16 +296,12 @@ def close_allocation(
             .where(ResourceAllocationItem.allocation_id == allocation.id)
             .order_by(ResourceAllocationItem.resource_id)
         ).all()
-        requested_consumption = {
-            item.resource_code: item.quantity for item in close_body.items
-        }
+        requested_consumption = {item.resource_code: item.quantity for item in close_body.items}
         if len(requested_consumption) != len(close_body.items):
             raise HTTPException(422, "No se puede repetir un recurso en el cierre")
         allocated_codes = {item.resource.code for item in items}
         if requested_consumption.keys() != allocated_codes:
-            raise HTTPException(
-                422, "El cierre debe incluir exactamente los recursos adjudicados"
-            )
+            raise HTTPException(422, "El cierre debe incluir exactamente los recursos adjudicados")
         if allocation.status == AllocationStatus.CLOSED:
             if any(
                 item.consumed_quantity != requested_consumption[item.resource.code]
@@ -318,6 +314,9 @@ def close_allocation(
                 .where(NationalResource.id.in_([item.resource_id for item in items]))
                 .order_by(NationalResource.code)
                 .with_for_update()
+                # item.resource was read before locking; refresh any cached quantities
+                # after waiting for another allocation's close/commit transaction.
+                .execution_options(populate_existing=True)
             ).all()
             resources_by_id = {resource.id: resource for resource in resources}
             for item in items:
