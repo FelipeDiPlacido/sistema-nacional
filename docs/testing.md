@@ -130,9 +130,17 @@ Debe devolver `201`, estado `ACTIVE` y un `id` de adjudicación. Guardá ese ID.
 
 ## Liberar y comprobar idempotencia
 
-25. Ejecutá `POST /api/v1/allocations/{allocation_id}/close` usando el ID guardado. No lleva cuerpo. Debe devolver `CLOSED` y `closed_at`.
-26. Consultá el recurso: debe tener 0 comprometidos y 100 disponibles.
-27. Repetí el cierre: mantiene `CLOSED` y la disponibilidad 100; no suma recursos de más.
+25. Ejecutá `POST /api/v1/allocations/{allocation_id}/close` usando el ID guardado y declarando cuánto se consumió de cada recurso:
+
+```json
+{
+  "items": [{"resource_code": "LP_WATER", "quantity": 15}]
+}
+```
+
+El body debe incluir exactamente los recursos adjudicados; cada cantidad puede ser cero, pero no superar lo adjudicado. La respuesta debe devolver `CLOSED`, `closed_at` y `consumed_quantity: 15` en el ítem.
+26. Consultá el recurso: debe tener total 85, 0 comprometidos y 85 disponibles. Las 15 unidades consumidas salen del total; las otras 10 previamente comprometidas se liberan.
+27. Repetí el cierre con el mismo body: mantiene `CLOSED` y el inventario en 85 disponibles. Un consumo distinto para una adjudicación ya cerrada devuelve `409`.
 
 ## Casos adicionales
 
@@ -146,7 +154,7 @@ Debe devolver `201`, estado `ACTIVE` y un `id` de adjudicación. Guardá ese ID.
 
 ## Prueba automática contra la API levantada
 
-El script usa la biblioteca estándar de Python y crea dos ONG de demostración, inventarios y adjudicaciones. No elimina esos registros: termina con ambas adjudicaciones cerradas y los recursos liberados.
+El script usa la biblioteca estándar de Python y crea dos ONG de demostración, inventarios y adjudicaciones. No elimina esos registros: termina con ambas adjudicaciones cerradas, registra consumo parcial y comprueba el stock remanente.
 
 Configurá estas variables en tu terminal con las cuentas de tu ambiente:
 

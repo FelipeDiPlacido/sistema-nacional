@@ -138,20 +138,104 @@ def test_onboarding_to_project_closure_through_http(client, coordinator):
     other = next(item for item in allocations if item["ngo_id"] == second)
     other_url = f"/api/v1/allocations/{other['id']}"
     assert client.get(other_url, headers=first_headers).status_code == 404
-    assert client.post(other_url + "/close", headers=first_headers).status_code == 404
+    other_code = other["items"][0]["resource_code"]
+    assert (
+        client.post(
+            other_url + "/close",
+            json={"items": [{"resource_code": other_code, "quantity": 0}]},
+            headers=first_headers,
+        ).status_code
+        == 404
+    )
     for item in allocations:
         url = f"/api/v1/allocations/{item['id']}/close"
         headers = first_headers if item["ngo_id"] == first else coordinator
-        closed = client.post(url, headers=headers)
+        code = item["items"][0]["resource_code"]
+        close_body = {"items": [{"resource_code": code, "quantity": 2}]}
+        closed = client.post(url, json=close_body, headers=headers)
         assert closed.status_code == 200, closed.text
         assert closed.json()["status"] == "CLOSED"
+        assert closed.json()["items"][0]["consumed_quantity"] == 2
         # SQLite does not preserve timezone metadata; compare the UTC instants.
-        repeated = client.post(url, headers=headers).json()
+        repeated = client.post(url, json=close_body, headers=headers).json()
         assert datetime.fromisoformat(repeated["closed_at"]).replace(
             tzinfo=UTC
         ) == datetime.fromisoformat(closed.json()["closed_at"]).replace(tzinfo=UTC)
-        code = item["items"][0]["resource_code"]
-        assert client.get(f"/api/v1/resources/{code}").json()["available_quantity"] == 10
+        inventory = client.get(f"/api/v1/resources/{code}").json()
+        assert inventory["total_quantity"] == 8
+        assert inventory["committed_quantity"] == 0
+        assert inventory["available_quantity"] == 8
+
+
+@pytest.mark.parametrize(
+    ("consumed_quantity", "expected_total"),
+    [(0, 10), (3, 7), (6, 4)],
+)
+def test_close_consumes_declared_quantity_once(
+    client, coordinator, consumed_quantity, expected_total
+):
+    ngo_id, headers = register(client)
+    approve(client, ngo_id)
+    stock(client, ngo_id, "CLOSE_CONSUMPTION", headers, quantity=10)
+    allocation = award(
+        client, ngo_id, "CLOSE_CONSUMPTION", coordinator, quantity=6
+    ).json()
+    url = f"/api/v1/allocations/{allocation['id']}/close"
+    body = {
+        "items": [
+            {"resource_code": "CLOSE_CONSUMPTION", "quantity": consumed_quantity}
+        ]
+    }
+
+    closed = client.post(url, json=body, headers=headers)
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["items"][0]["consumed_quantity"] == consumed_quantity
+    inventory = client.get("/api/v1/resources/CLOSE_CONSUMPTION").json()
+    assert inventory["total_quantity"] == expected_total
+    assert inventory["committed_quantity"] == 0
+    assert inventory["available_quantity"] == expected_total
+
+    repeated = client.post(url, json=body, headers=headers)
+    assert repeated.status_code == 200
+    assert client.get("/api/v1/resources/CLOSE_CONSUMPTION").json() == inventory
+    conflicting = client.post(
+        url,
+        json={"items": [{"resource_code": "CLOSE_CONSUMPTION", "quantity": 1}]},
+        headers=headers,
+    )
+    assert conflicting.status_code == 409
+    assert client.get("/api/v1/resources/CLOSE_CONSUMPTION").json() == inventory
+
+
+def test_close_rejects_incomplete_or_excess_consumption_without_mutating_stock(
+    client, coordinator
+):
+    ngo_id, headers = register(client)
+    approve(client, ngo_id)
+    stock(client, ngo_id, "INVALID_CLOSE", headers, quantity=10)
+    allocation = award(client, ngo_id, "INVALID_CLOSE", coordinator, quantity=6).json()
+    url = f"/api/v1/allocations/{allocation['id']}/close"
+    invalid_bodies = [
+        {"items": []},
+        {"items": [{"resource_code": "INVALID_CLOSE", "quantity": 7}]},
+        {
+            "items": [
+                {"resource_code": "INVALID_CLOSE", "quantity": 2},
+                {"resource_code": "INVALID_CLOSE", "quantity": 1},
+            ]
+        },
+    ]
+    for body in invalid_bodies:
+        assert client.post(url, json=body, headers=headers).status_code == 422
+        assert (
+            client.get("/api/v1/resources/INVALID_CLOSE").json()["committed_quantity"] == 6
+        )
+        assert (
+            client.get(f"/api/v1/allocations/{allocation['id']}", headers=headers).json()[
+                "status"
+            ]
+            == "ACTIVE"
+        )
 
 
 def test_roles_cannot_self_elevate_or_use_old_static_admin_token(client, coordinator):
@@ -217,7 +301,11 @@ def test_suspension_and_revocation_block_new_awards_but_allow_release(client, co
         == 409
     )
     assert (
-        client.post(f"/api/v1/allocations/{created['id']}/close", headers=headers).status_code
+        client.post(
+            f"/api/v1/allocations/{created['id']}/close",
+            json={"items": [{"resource_code": "SUSPEND_STOCK", "quantity": 0}]},
+            headers=headers,
+        ).status_code
         == 200
     )
     client.patch(

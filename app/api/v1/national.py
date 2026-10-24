@@ -23,6 +23,7 @@ from app.models import NGO, Certification, NationalResource, NGOCertification, U
 from app.models.national import NGOCertificationStatus, NGOStatus, RiskLevel, UserRole
 from app.schemas import (
     AccountResponse,
+    AllocationClose,
     AllocationCreate,
     AllocationResponse,
     AvailabilityConstraint,
@@ -453,14 +454,15 @@ def cancel_allocation_intent(
 @router.post(
     "/allocations/{allocation_id}/close",
     response_model=AllocationResponse,
-    summary="Finalizar la participación de una ONG y liberar los recursos adjudicados",
+    summary="Cerrar una adjudicación y descontar los recursos consumidos",
 )
 def close_project_allocation(
     allocation_id: uuid.UUID,
+    body: AllocationClose,
     db: DbSession,
     user: CurrentUser,
 ):
-    return close_allocation(db, allocation_id, allocation_scope(user))
+    return close_allocation(db, allocation_id, body, allocation_scope(user))
 
 
 @router.get("/ngos", response_model=list[EnabledNGOResponse], summary="Listar ONG para revisión")

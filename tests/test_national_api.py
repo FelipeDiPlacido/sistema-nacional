@@ -379,16 +379,20 @@ def test_closing_allocation_releases_resources_once(client, db, registration_pay
     unauthorized = client.post(close_url)
     assert unauthorized.status_code == 401
 
-    closed = client.post(close_url, headers=admin_headers)
+    close_body = {"items": [{"resource_code": "CLOSABLE_STOCK", "quantity": 2}]}
+    closed = client.post(close_url, json=close_body, headers=admin_headers)
     assert closed.status_code == 200
     assert closed.json()["status"] == "CLOSED"
     assert closed.json()["closed_at"] is not None
-    assert client.get("/api/v1/resources/CLOSABLE_STOCK").json()["available_quantity"] == 8
+    assert closed.json()["items"][0]["consumed_quantity"] == 2
+    inventory = client.get("/api/v1/resources/CLOSABLE_STOCK").json()
+    assert inventory["total_quantity"] == 6
+    assert inventory["available_quantity"] == 6
 
-    repeated_close = client.post(close_url, headers=admin_headers)
+    repeated_close = client.post(close_url, json=close_body, headers=admin_headers)
     assert repeated_close.status_code == 200
     assert repeated_close.json()["status"] == "CLOSED"
-    assert client.get("/api/v1/resources/CLOSABLE_STOCK").json()["committed_quantity"] == 0
+    assert client.get("/api/v1/resources/CLOSABLE_STOCK").json() == inventory
 
 
 def test_allocation_requires_admin_and_idempotency_key(client):

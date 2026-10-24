@@ -180,6 +180,10 @@ class ResourceAllocationItem(Base):
     __tablename__ = "resource_allocation_items"
     __table_args__ = (
         CheckConstraint("quantity > 0", name="ck_resource_allocation_items_quantity_positive"),
+        CheckConstraint(
+            "consumed_quantity >= 0 AND consumed_quantity <= quantity",
+            name="ck_resource_allocation_items_consumed_within_quantity",
+        ),
         Index("ix_resource_allocation_items_allocation_id", "allocation_id"),
         Index("ix_resource_allocation_items_resource_id", "resource_id"),
         UniqueConstraint(
@@ -193,5 +197,6 @@ class ResourceAllocationItem(Base):
     allocation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("resource_allocations.id"))
     resource_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("national_resources.id"))
     quantity: Mapped[int] = mapped_column(Integer)
+    consumed_quantity: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     allocation: Mapped[ResourceAllocation] = relationship(back_populates="items")
     resource: Mapped[NationalResource] = relationship()

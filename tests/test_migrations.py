@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
+from app.schemas import AllocationClose, AllocationItemConsumption
 from app.services.allocation_service import close_allocation
 
 
@@ -77,8 +78,15 @@ def test_upgrade_preserves_existing_accounts_stock_and_active_allocations():
         constraints = inspect(engine).get_unique_constraints("resource_allocations")
         assert any(item["column_names"] == ["project_reference", "ngo_id"] for item in constraints)
         with Session(engine) as db:
-            closed = close_allocation(db, ids["allocation"])
+            closed = close_allocation(
+                db,
+                ids["allocation"],
+                AllocationClose(
+                    items=[AllocationItemConsumption(resource_code="LEGACY_RESOURCE", quantity=0)]
+                ),
+            )
             assert closed.status == "CLOSED"
+            assert closed.items[0].consumed_quantity == 0
         with engine.connect() as connection:
             assert connection.scalar(text("SELECT committed_quantity FROM national_resources")) == 0
         migrate("downgrade", "0003")
